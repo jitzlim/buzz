@@ -1,0 +1,569 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>BUZZ // ASCII SOUND SYSTEM</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" crossorigin="anonymous" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin="anonymous" />
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;700&display=swap" rel="stylesheet" crossorigin="anonymous" />
+  <link href="https://fonts.googleapis.com/css2?family=VT323&display=swap" rel="stylesheet" crossorigin="anonymous" />
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      color-scheme: only light;
+      --font: 'JetBrains Mono', 'Inconsolata', monospace;
+      --accent: #FE2C11;
+      --ink: rgba(255,255,255,0.92);
+      --dim: rgba(255,255,255,0.42);
+      --faint: rgba(255,255,255,0.16);
+      --panel: rgba(0,0,0,0.34);
+      --panel-strong: rgba(0,0,0,0.72);
+      --scan: rgba(255,255,255,0.022);
+    }
+
+    html, body {
+      width: 100%; height: 100%;
+      background: #000 !important;
+      color: #fff !important;
+      font-family: var(--font);
+      overflow: hidden;
+    }
+
+    #dither-canvas {
+      position: fixed;
+      inset: 0;
+      width: 100%;
+      height: 100%;
+      pointer-events: none;
+      z-index: 1;
+      image-rendering: pixelated;
+    }
+
+    /* CRT viewport mask — curved shape drawn by JS */
+    #border-frame {
+      position: fixed;
+      inset: 0;
+      width: 100%;
+      height: 100%;
+      pointer-events: none;
+      z-index: 8;
+    }
+
+    #hud {
+      position: fixed;
+      inset: 0;
+      pointer-events: none;
+      z-index: 10;
+      color: var(--ink);
+      text-transform: uppercase;
+      letter-spacing: 0.16em;
+    }
+
+    #hud-svg {
+      position: absolute;
+      inset: 0;
+      width: 100%;
+      height: 100%;
+    }
+
+    #hud-chrome {
+      position: absolute;
+      inset: 0;
+      padding: clamp(18px, 2.2vw, 34px);
+      background: repeating-linear-gradient(to bottom, transparent 0 6px, var(--scan) 6px 7px);
+    }
+
+    .rail {
+      position: absolute;
+      display: grid;
+      gap: 10px;
+    }
+
+    .rail-top {
+      top: clamp(20px, 2vw, 30px);
+      left: clamp(20px, 2vw, 30px);
+      right: clamp(20px, 2vw, 30px);
+      grid-template-columns: minmax(0, 1.2fr) minmax(220px, 0.8fr);
+      align-items: start;
+    }
+
+    .rail-left,
+    .rail-right {
+      top: 50%;
+      width: min(18vw, 220px);
+      transform: translateY(-50%);
+    }
+
+    .rail-left { left: clamp(24px, 2.4vw, 36px); }
+    .rail-right { right: clamp(24px, 2.4vw, 36px); }
+
+    .rail-bottom {
+      left: clamp(20px, 2vw, 30px);
+      right: clamp(20px, 2vw, 30px);
+      bottom: clamp(22px, 2vw, 32px);
+      grid-template-columns: minmax(0, 1.2fr) minmax(0, 1fr);
+      align-items: end;
+    }
+
+    .stack {
+      display: grid;
+      gap: 10px;
+    }
+
+    .panel {
+      position: relative;
+      background: linear-gradient(180deg, rgba(0,0,0,0.11), var(--panel));
+      border: 1px solid rgba(255,255,255,0.14);
+      padding: 11px 12px 12px;
+      min-height: 44px;
+      overflow: hidden;
+    }
+
+    .panel::before {
+      content: '';
+      position: absolute;
+      inset: 0;
+      border-top: 1px solid rgba(255,255,255,0.05);
+      border-left: 1px solid rgba(255,255,255,0.04);
+      pointer-events: none;
+    }
+
+    .panel.hot {
+      border-color: rgba(254,44,17,0.55);
+      box-shadow: 0 0 0 1px rgba(254,44,17,0.18), inset 0 0 14px rgba(254,44,17,0.06);
+    }
+
+    .panel.muted {
+      opacity: 0.66;
+    }
+
+    .meta {
+      font-size: 9px;
+      line-height: 1.4;
+      color: var(--dim);
+    }
+
+    .micro {
+      font-size: 8px;
+      line-height: 1.4;
+      color: var(--dim);
+    }
+
+    .title {
+      display: grid;
+      gap: 8px;
+    }
+
+    .title-mark {
+      font-family: 'VT323', var(--font);
+      font-size: clamp(28px, 4.2vw, 56px);
+      line-height: 0.92;
+      letter-spacing: 0.18em;
+      color: var(--accent);
+      text-shadow: 0 0 18px rgba(254,44,17,0.16);
+    }
+
+    .title-sub {
+      display: flex;
+      gap: 12px;
+      flex-wrap: wrap;
+      font-size: 9px;
+      color: var(--dim);
+    }
+
+    .top-grid,
+    .bottom-grid {
+      display: grid;
+      gap: 10px;
+    }
+
+    .top-grid {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+
+    .bottom-grid {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+    }
+
+    .label {
+      font-size: 8px;
+      color: var(--dim);
+      margin-bottom: 7px;
+    }
+
+    .value {
+      font-size: clamp(16px, 1.5vw, 21px);
+      line-height: 1;
+      color: var(--ink);
+    }
+
+    .value.small {
+      font-size: 14px;
+    }
+
+    .value.accent {
+      color: var(--accent);
+      text-shadow: 0 0 12px rgba(254,44,17,0.22);
+    }
+
+    .row {
+      display: grid;
+      grid-template-columns: auto 1fr;
+      gap: 10px;
+      align-items: center;
+      min-height: 22px;
+    }
+
+    .row-key {
+      font-size: 8px;
+      color: var(--dim);
+      white-space: nowrap;
+    }
+
+    .row-value {
+      font-size: 11px;
+      color: var(--ink);
+      text-align: right;
+      min-width: 0;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .meter {
+      height: 8px;
+      border: 1px solid rgba(255,255,255,0.14);
+      background:
+        linear-gradient(to right, rgba(255,255,255,0.04), rgba(255,255,255,0.015)),
+        repeating-linear-gradient(to right, transparent 0 11px, rgba(255,255,255,0.045) 11px 12px);
+      position: relative;
+      overflow: hidden;
+    }
+
+    .meter::after {
+      content: '';
+      position: absolute;
+      inset: 0 auto 0 0;
+      width: calc(var(--level, 0) * 100%);
+      background: linear-gradient(to right, rgba(255,255,255,0.4), var(--accent));
+      box-shadow: 0 0 16px rgba(254,44,17,0.35);
+    }
+
+    .meter.mono::after {
+      background: linear-gradient(to right, rgba(255,255,255,0.22), rgba(255,255,255,0.86));
+      box-shadow: 0 0 12px rgba(255,255,255,0.08);
+    }
+
+    .trace-panel {
+      padding-bottom: 8px;
+    }
+
+    #spectrum-trace {
+      width: 100%;
+      height: 48px;
+      display: block;
+    }
+
+    #spectrum-trace polyline {
+      fill: none;
+      stroke: var(--ink);
+      stroke-width: 1.2;
+      opacity: 0.86;
+    }
+
+    #spectrum-trace .trace-accent {
+      stroke: var(--accent);
+      opacity: 0.9;
+    }
+
+    .status-lights {
+      display: grid;
+      grid-template-columns: repeat(6, 1fr);
+      gap: 6px;
+    }
+
+    .status-light {
+      height: 10px;
+      border: 1px solid rgba(255,255,255,0.2);
+      background: rgba(255,255,255,0.06);
+    }
+
+    .status-light.active {
+      background: var(--accent);
+      border-color: rgba(254,44,17,0.8);
+      box-shadow: 0 0 10px rgba(254,44,17,0.34);
+    }
+
+    .status-light.soft {
+      background: rgba(255,255,255,0.68);
+      border-color: rgba(255,255,255,0.8);
+      box-shadow: 0 0 10px rgba(255,255,255,0.14);
+    }
+
+    .status-matrix {
+      display: grid;
+      grid-template-columns: repeat(4, 10px);
+      gap: 7px;
+      justify-content: end;
+    }
+
+    .status-cell {
+      width: 10px;
+      height: 10px;
+      border: 1px solid rgba(255,255,255,0.22);
+      background: rgba(255,255,255,0.04);
+    }
+
+    .status-cell.live {
+      background: var(--accent);
+      border-color: rgba(254,44,17,0.8);
+      box-shadow: 0 0 10px rgba(254,44,17,0.3);
+    }
+
+    .status-cell.white {
+      background: rgba(255,255,255,0.9);
+      border-color: rgba(255,255,255,0.9);
+    }
+
+    .summary-line {
+      display: flex;
+      justify-content: space-between;
+      gap: 10px;
+      align-items: baseline;
+      font-size: 10px;
+      color: var(--dim);
+    }
+
+    .summary-line strong {
+      color: var(--ink);
+      font-weight: 700;
+    }
+
+    #audio-prompt {
+      position: fixed;
+      bottom: clamp(92px, 10vw, 132px);
+      left: 50%;
+      transform: translateX(-50%);
+      font-family: var(--font);
+      font-size: 9px;
+      letter-spacing: 0.25em;
+      text-transform: uppercase;
+      color: #ffffff;
+      background: rgba(0,0,0,0.82);
+      border: 1px solid rgba(255,255,255,0.18);
+      padding: 6px 12px;
+      pointer-events: none;
+      z-index: 20;
+      transition: opacity 0.5s;
+      white-space: nowrap;
+    }
+
+    #audio-prompt.hidden { opacity: 0; }
+
+    /* Plain byline — no box, no rotation */
+    #byline {
+      position: fixed;
+      bottom: 14px;
+      left: 50%;
+      transform: translateX(-50%);
+      font-family: var(--font);
+      font-size: 9px;
+      letter-spacing: 0.28em;
+      text-transform: uppercase;
+      color: rgba(255,255,255,0.18);
+      pointer-events: none;
+      z-index: 20;
+      white-space: nowrap;
+    }
+
+    #webcam-video {
+      position: fixed;
+      width: 1px; height: 1px;
+      opacity: 0;
+      pointer-events: none;
+      top: 0; left: 0;
+    }
+
+    @media (max-width: 900px) {
+      .rail-top,
+      .rail-bottom {
+        grid-template-columns: 1fr;
+      }
+
+      .rail-left,
+      .rail-right {
+        width: min(29vw, 176px);
+      }
+
+      .title-mark {
+        font-size: clamp(24px, 8vw, 38px);
+      }
+    }
+
+    @media (max-width: 720px) {
+      .rail-left,
+      .rail-right {
+        display: none;
+      }
+
+      .top-grid,
+      .bottom-grid {
+        grid-template-columns: 1fr 1fr;
+      }
+
+      .panel {
+        padding: 10px;
+      }
+
+      #audio-prompt {
+        bottom: 84px;
+        font-size: 8px;
+      }
+    }
+  </style>
+</head>
+<body>
+
+  <video id="webcam-video" autoplay playsinline muted></video>
+  <canvas id="dither-canvas"></canvas>
+  <canvas id="border-frame"></canvas>
+
+  <div id="hud">
+    <svg id="hud-svg" xmlns="http://www.w3.org/2000/svg"></svg>
+    <div id="hud-chrome">
+      <div class="rail rail-top">
+        <div class="title">
+          <div class="meta">CAM-SYNTH APPARATUS</div>
+          <div class="title-mark">BUZZ</div>
+          <div class="title-sub">
+            <span id="title-signal">SIGNAL / INIT</span>
+            <span id="title-lock">TRACK / 00%</span>
+            <span id="title-scale">LATTICE / PENTA</span>
+            <span id="title-fps">SCAN / 00 FPS</span>
+          </div>
+        </div>
+        <div class="top-grid">
+          <div class="panel" id="panel-voice">
+            <div class="label">Voice Matrix</div>
+            <div class="value" id="top-voice">DUO</div>
+          </div>
+          <div class="panel" id="panel-mode">
+            <div class="label">Mod Bus</div>
+            <div class="value accent" id="top-mode">ECHO</div>
+          </div>
+          <div class="panel trace-panel">
+            <div class="label">Spectral Ribbon</div>
+            <svg id="spectrum-trace" viewBox="0 0 220 48" preserveAspectRatio="none">
+              <polyline id="spectrum-base" points="0,24 220,24"></polyline>
+              <polyline id="spectrum-accent" class="trace-accent" points="0,24 220,24"></polyline>
+            </svg>
+          </div>
+          <div class="panel">
+            <div class="label">Status Matrix</div>
+            <div class="status-matrix" id="status-matrix">
+              <span class="status-cell"></span>
+              <span class="status-cell"></span>
+              <span class="status-cell"></span>
+              <span class="status-cell"></span>
+              <span class="status-cell"></span>
+              <span class="status-cell"></span>
+              <span class="status-cell"></span>
+              <span class="status-cell"></span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="rail rail-left">
+        <div class="stack">
+          <div class="panel muted" id="panel-track">
+            <div class="label">Track Integrity</div>
+            <div class="meter mono" id="meter-track"></div>
+            <div class="summary-line"><span id="left-track-label">SEEKING</span><strong id="left-track-value">12%</strong></div>
+          </div>
+          <div class="panel muted" id="panel-primary">
+            <div class="label">Primary Field</div>
+            <div class="row"><span class="row-key">Vector</span><span class="row-value" id="left-vector">X+00 / Y+00</span></div>
+            <div class="row"><span class="row-key">Depth</span><span class="row-value" id="left-depth">0.00</span></div>
+            <div class="row"><span class="row-key">Field</span><span class="row-value" id="left-field">DORMANT</span></div>
+          </div>
+          <div class="panel">
+            <div class="label">Trigger Array</div>
+            <div class="status-lights" id="trigger-array">
+              <span class="status-light"></span>
+              <span class="status-light"></span>
+              <span class="status-light"></span>
+              <span class="status-light"></span>
+              <span class="status-light"></span>
+              <span class="status-light"></span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="rail rail-right">
+        <div class="stack">
+          <div class="panel muted" id="panel-gate">
+            <div class="label">Carrier Gate</div>
+            <div class="meter" id="meter-gate"></div>
+            <div class="summary-line"><span id="right-gate-label">THRESHOLD</span><strong id="right-gate-value">00%</strong></div>
+          </div>
+          <div class="panel muted" id="panel-fx">
+            <div class="label">Effect Chamber</div>
+            <div class="row"><span class="row-key" id="fx-row-1-label">Echo Wet</span><span class="row-value" id="fx-row-1-value">0%</span></div>
+            <div class="row"><span class="row-key" id="fx-row-2-label">Time</span><span class="row-value" id="fx-row-2-value">0ms</span></div>
+            <div class="row"><span class="row-key" id="fx-row-3-label">Feedback</span><span class="row-value" id="fx-row-3-value">0%</span></div>
+          </div>
+          <div class="panel">
+            <div class="label">FX Envelope</div>
+            <div class="meter" id="meter-fx"></div>
+            <div class="summary-line"><span id="fx-envelope-label">MOD FLUX</span><strong id="fx-envelope-value">00%</strong></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="rail rail-bottom">
+        <div class="bottom-grid">
+          <div class="panel" id="panel-carrier">
+            <div class="label">Carrier</div>
+            <div class="value" id="bottom-carrier">---</div>
+          </div>
+          <div class="panel" id="panel-note">
+            <div class="label">Note Locus</div>
+            <div class="value accent" id="bottom-note">---</div>
+          </div>
+          <div class="panel" id="panel-gate-state">
+            <div class="label">Gate State</div>
+            <div class="value small" id="bottom-gate">THRESHOLD</div>
+          </div>
+          <div class="panel" id="panel-arp">
+            <div class="label">Arp Bus</div>
+            <div class="value small" id="bottom-arp">OFFLINE</div>
+          </div>
+        </div>
+        <div class="bottom-grid">
+          <div class="panel">
+            <div class="label">Signal Registry</div>
+            <div class="row"><span class="row-key">Mode</span><span class="row-value" id="bottom-mode">ECHO CHAMBER</span></div>
+            <div class="row"><span class="row-key">Voice</span><span class="row-value" id="bottom-voice">DUO</span></div>
+            <div class="row"><span class="row-key">Scale</span><span class="row-value" id="bottom-scale">PENTA</span></div>
+          </div>
+          <div class="panel muted">
+            <div class="label">Band Energy</div>
+            <div class="row"><span class="row-key">Bass Flux</span><span class="row-value" id="energy-bass">00%</span></div>
+            <div class="row"><span class="row-key">Presence</span><span class="row-value" id="energy-presence">00%</span></div>
+            <div class="row"><span class="row-key">Gesture</span><span class="row-value" id="energy-gesture">QUIET</span></div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div id="audio-prompt">CLICK ANYWHERE TO ENABLE AUDIO</div>
+  <div id="byline">JITZ</div>
+
+  <script type="module" src="/src/main.js"></script>
+</body>
+</html>
