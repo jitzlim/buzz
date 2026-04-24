@@ -678,6 +678,14 @@ export async function captureOneBarLoop() {
   return true
 }
 
+export async function stopLoopCapture() {
+  if (loopCaptureTimer) {
+    clearTimeout(loopCaptureTimer)
+    loopCaptureTimer = null
+  }
+  return finalizeLoopCapture()
+}
+
 export async function clearLoop() {
   if (loopCaptureTimer) {
     clearTimeout(loopCaptureTimer)

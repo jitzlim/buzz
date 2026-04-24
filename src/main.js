@@ -3,7 +3,7 @@ import {
   setFrequency, setVolume, setPinchGate, getFreqData,
   nextInstrument, getCurrentInstrumentName, getCurrentFrequency,
   getCurrentScaleName, getKeyLabel, cycleRootNote, getTempoBpm, getDelayDivisionLabel,
-  getLoopState, getLoopLayerCount, getLoopCaptureProgress, captureOneBarLoop, clearLoop,
+  getLoopState, getLoopLayerCount, getLoopCaptureProgress, captureOneBarLoop, stopLoopCapture, clearLoop,
   getSceneState, applySceneState,
   setDelayPitchMix,
   toggleArp, isArpActive,
@@ -51,8 +51,11 @@ const hand2Smooth = { x: 0, y: 0, z: 0, pinch: 0, angle: 0, seeded: false }
 let dualPinchStart = 0
 let dualPinchActive = false
 let dualPinchAction = ''
-const LOOP_HOLD_SHORT = 420
+let loopArmed = false
+let loopGestureRecording = false
+let loopArmSince = 0
 const LOOP_HOLD_LONG = 1200
+const FX_ARM_PINCH = 0.18
 const sceneSlots = [null, null, null]
 let scenePointer = 0
 let sceneBanner = ''
@@ -117,6 +120,13 @@ function gateLabel(pinch) {
   return 'THRESHOLD'
 }
 
+function loopLabel(loopState, loopLayers, loopProgress) {
+  if (loopState === 'RECORDING') return `LOOP REC ${Math.round(loopProgress * 100)}%`
+  if (loopArmed) return 'LOOP ARMED'
+  if (loopState === 'PLAYING') return `LOOP ${loopLayers}/3`
+  return ''
+}
+
 function smoothPrimaryHand(hand, dt) {
   if (!hand.active) {
     handSmooth.seeded = false
@@ -130,7 +140,7 @@ function smoothPrimaryHand(hand, dt) {
     handSmooth.pinch = hand.pinch
     handSmooth.spread = hand.spread
     handSmooth.depth = hand.depth
-    handSmooth.angle = hand.angle
+    handSmooth.angle = hand.angle || 0
     handSmooth.seeded = true
   } else {
     handSmooth.x = smooth(handSmooth.x, hand.attractor.x, dt, 7, 6)
@@ -139,7 +149,7 @@ function smoothPrimaryHand(hand, dt) {
     handSmooth.pinch = smooth(handSmooth.pinch, hand.pinch, dt, 10, 8)
     handSmooth.spread = smooth(handSmooth.spread, hand.spread, dt, 6, 5)
     handSmooth.depth = smooth(handSmooth.depth, hand.depth, dt, 6, 5)
-    handSmooth.angle = smoothAngle(handSmooth.angle, hand.angle, dt, 9)
+    handSmooth.angle = smoothAngle(handSmooth.angle, hand.angle || 0, dt, 9)
   }
 
   return {
@@ -299,7 +309,7 @@ function loop(now) {
       pushSceneBanner(`KEY ROOT ${root}`, now)
       hud.pulses.mode = 1
     }
-    if (checkArpToggleGesture()) {
+    if (checkArpToggleGesture() && !hand2.palm) {
       lastArpRoot = active ? frequencyFromHand(controlHand) : 440
       toggleArp(lastArpRoot)
       hud.pulses.arp = 1
@@ -321,11 +331,6 @@ function loop(now) {
 
     const vibratoNorm = clamp((spread - 0.1) / 0.4, 0, 1)
     setVibrato(vibratoNorm)
-
-    if (leftFxMode !== 2) {
-      const filterNorm = clamp((attractor.x + 3) / 6, 0, 1)
-      setFilterCutoff(filterNorm)
-    }
     } else if (audioStarted) {
       setPinchGate(1)
       setVolume(0)
@@ -337,29 +342,31 @@ function loop(now) {
       hand2Smooth.y = hand2.attractor.y
       hand2Smooth.z = hand2.attractor.z
       hand2Smooth.pinch = hand2.pinch
-      hand2Smooth.angle = hand2.angle
+      hand2Smooth.angle = hand2.angle || 0
       hand2Smooth.seeded = true
     } else {
       hand2Smooth.x = smooth(hand2Smooth.x, hand2.attractor.x, dt, 9, 7)
       hand2Smooth.y = smooth(hand2Smooth.y, hand2.attractor.y, dt, 9, 7)
       hand2Smooth.z = smooth(hand2Smooth.z, hand2.attractor.z, dt, 9, 7)
       hand2Smooth.pinch = smooth(hand2Smooth.pinch, hand2.pinch, dt, 11, 8)
-      hand2Smooth.angle = smoothAngle(hand2Smooth.angle, hand2.angle, dt, 10)
+      hand2Smooth.angle = smoothAngle(hand2Smooth.angle, hand2.angle || 0, dt, 10)
     }
     } else {
       hand2Smooth.seeded = false
     }
 
-    if (hand2.active && audioStarted) {
+    const fxArmed = hand2.active && audioStarted && hand2Smooth.pinch < FX_ARM_PINCH
+
+    if (fxArmed) {
     const y2 = hand2Smooth.y
     const x2 = hand2Smooth.x
     const p2 = hand2Smooth.pinch
     const rot2 = angleNorm(hand2Smooth.angle)
 
       if (leftFxMode === 0) {
-      const wet = clamp(1 - Math.min(p2 / 0.3, 1), 0, 0.9)
+      const wet = clamp(1 - Math.min(p2 / FX_ARM_PINCH, 1), 0, 0.9)
       const timeControl = rot2
-      const fb = clamp((x2 + 3) / 6, 0, 0.8)
+      const fb = clamp((y2 + 2) / 4, 0, 0.8)
       setDelay(timeControl, fb, wet)
       setStutter(0.2, 0)
       setBitcrush(0)
@@ -373,8 +380,8 @@ function loop(now) {
         summaryValue: `${Math.round(((wet + fb) * 0.5) * 100)}%`,
       }
       } else if (leftFxMode === 1) {
-      setDelayPitchMix(0)
-      const revWet = clamp(1 - Math.min(p2 / 0.3, 1), 0.1, 0.9)
+        setDelayPitchMix(0)
+      const revWet = clamp(1 - Math.min(p2 / FX_ARM_PINCH, 1), 0.1, 0.9)
       const vibDepth = clamp(rot2, 0, 0.6)
       const freeze = p2 < 0.055
       setReverbWet(revWet)
@@ -396,7 +403,7 @@ function loop(now) {
       setReverbFreeze(false)
       const cutoffNorm = rot2
       const q = clamp(((y2 + 2) / 4) * 18, 0.5, 18)
-      const vibratoRate = clamp((1 - Math.min(p2 / 0.3, 1)) * 10, 1, 10)
+      const vibratoRate = clamp((1 - Math.min(p2 / FX_ARM_PINCH, 1)) * 10, 1, 10)
       setFilterCutoff(cutoffNorm)
       setFilterQ(q)
       setVibratoRate(vibratoRate)
@@ -416,7 +423,7 @@ function loop(now) {
       setReverbFreeze(false)
       const macro = rot2
       const crush = clamp((x2 + 3) / 6, 0, 1)
-      const drive = clamp(1 - Math.min(p2 / 0.3, 1), 0, 1)
+      const drive = clamp(1 - Math.min(p2 / FX_ARM_PINCH, 1), 0, 1)
       const stutterRate = rot2
       const stutterDepth = clamp(crush * 0.9, 0, 1)
 
@@ -442,9 +449,19 @@ function loop(now) {
       setStutter(0.2, 0)
       const spreadNorm = clamp((y2 + 2) / 4, 0, 1)
       const tintNorm = rot2
-      const densityNorm = clamp(1 - Math.min(p2 / 0.3, 1), 0, 1)
+      const densityNorm = clamp(1 - Math.min(p2 / FX_ARM_PINCH, 1), 0, 1)
       setChordShape({ spread: spreadNorm, tint: tintNorm, density: densityNorm })
       fxTelemetry = buildChordTelemetry(densityNorm)
+      }
+    } else if (hand2.active && audioStarted) {
+      fxTelemetry = {
+        mode: LEFT_FX_MODES[leftFxMode],
+        envelope: 0,
+        row1: ['FX Armed', 'NO'],
+        row2: ['Pinch', `${Math.round((1 - Math.min(hand2Smooth.pinch / FX_ARM_PINCH, 1)) * 100)}%`],
+        row3: ['Rotate', `${Math.round(angleNorm(hand2Smooth.angle) * 100)}%`],
+        summary: 'FX IDLE',
+        summaryValue: 'PINCH',
       }
     }
 
@@ -493,6 +510,43 @@ function updateFps(now) {
 }
 
 function handleLoopGesture(now, hand, hand2, enabled) {
+  if (!enabled) {
+    loopArmed = false
+    loopGestureRecording = false
+    loopArmSince = 0
+    return
+  }
+
+  const rightPinch = hand.active && hand.pinch < 0.08
+  const rightRelease = !hand.active || hand.pinch > 0.15
+  if (loopArmed && rightPinch && !loopGestureRecording) {
+    captureOneBarLoop().then(ok => {
+      if (!ok) loopGestureRecording = false
+    }).catch(() => {
+      loopGestureRecording = false
+    })
+    loopGestureRecording = true
+    hud.pulses.arp = 1
+  } else if (loopGestureRecording && rightRelease) {
+    stopLoopCapture().catch(() => {})
+    loopGestureRecording = false
+    loopArmed = false
+    loopArmSince = 0
+    hud.pulses.arp = 1
+  }
+
+  const bothPalms = hand.active && hand2.active && hand.palm && hand2.palm
+  if (bothPalms && !loopGestureRecording) {
+    loopArmed = true
+    if (!loopArmSince) loopArmSince = now
+    return
+  }
+
+  if (!bothPalms && loopArmed && !loopGestureRecording && !rightPinch) {
+    loopArmed = false
+    loopArmSince = 0
+  }
+
   const dualPinchNow = enabled
     && hand.active && hand2.active
     && hand.pinch < 0.07
@@ -509,12 +563,11 @@ function handleLoopGesture(now, hand, hand2, enabled) {
     const hold = now - dualPinchStart
     if (hold >= LOOP_HOLD_LONG && dualPinchAction !== 'clear') {
       clearLoop().catch(() => {})
+      loopArmed = false
+      loopGestureRecording = false
+      loopArmSince = 0
       hud.pulses.mode = 1
       dualPinchAction = 'clear'
-    } else if (hold >= LOOP_HOLD_SHORT && !dualPinchAction) {
-      captureOneBarLoop().catch(() => {})
-      hud.pulses.arp = 1
-      dualPinchAction = 'capture'
     }
     return
   }
@@ -674,12 +727,11 @@ function renderHud(telemetry) {
   r.bottomScale.textContent = `${telemetry.key} / ${telemetry.tempoBpm} BPM`
   r.energyBass.textContent = `${Math.round(telemetry.bass * 100)}%`
   r.energyPresence.textContent = `${Math.round(telemetry.presence * 100)}%`
-  r.energyGesture.textContent = telemetry.loopState === 'RECORDING'
-    ? `LOOP REC ${Math.round(telemetry.loopProgress * 100)}%`
+  const activeLoopLabel = loopLabel(telemetry.loopState, telemetry.loopLayers, telemetry.loopProgress)
+  r.energyGesture.textContent = activeLoopLabel
+    ? activeLoopLabel
     : telemetry.sceneBanner
       ? telemetry.sceneBanner
-    : telemetry.loopState === 'PLAYING'
-      ? `LOOP ${telemetry.loopLayers}/3`
       : telemetry.gestureState
 
   updateWaveform(telemetry)

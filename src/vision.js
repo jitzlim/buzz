@@ -15,13 +15,14 @@ let state = {
   attractor: { x: 0, y: 0, z: 0 },
   pinch:     0.3,
   angle:     0,
+  palm:      false,
   spread:    0.1,
   depth:     0,
   active:    false,
 }
 
 // Secondary hand (effects)
-let state2 = { attractor: { x: 0, y: 0, z: 0 }, pinch: 0.3, angle: 0, active: false }
+let state2 = { attractor: { x: 0, y: 0, z: 0 }, pinch: 0.3, angle: 0, palm: false, active: false }
 
 // One-frame gesture flags — reset at start of each tick
 let peaceReady      = false
@@ -197,7 +198,7 @@ export function tickVision(timestamp) {
   const results = handLandmarker.detectForVideo(video, timestamp)
 
   if (!results.landmarks || results.landmarks.length === 0) {
-    state.active = false; state2.active = false
+    state.active = false; state.palm = false; state2.active = false; state2.palm = false
     peaceStartT = 0; peaceFired = false
     peace2StartT = 0; peace2Fired = false; rootCycleFired = false
     wasPalm = false
@@ -238,10 +239,12 @@ export function tickVision(timestamp) {
     const dx = thumb.x - idx.x, dy = thumb.y - idx.y
     state.pinch  = Math.sqrt(dx * dx + dy * dy)
     state.angle  = calcPinchAngle(lm)
+    state.palm   = detectOpenPalm(lm)
     state.active = true
     updateGestures(lm, timestamp)
   } else {
     state.active = false
+    state.palm = false
     peaceStartT = 0
     peaceFired = false
   }
@@ -256,10 +259,12 @@ export function tickVision(timestamp) {
     const dx2 = thumb2.x - idx2.x, dy2 = thumb2.y - idx2.y
     state2.pinch  = Math.sqrt(dx2 * dx2 + dy2 * dy2)
     state2.angle  = calcPinchAngle(lm2)
+    state2.palm   = detectOpenPalm(lm2)
     state2.active = true
     updateGestures2(lm2, timestamp)
   } else {
     state2.active = false
+    state2.palm = false
     peace2StartT = 0
     peace2Fired = false
     rootCycleFired = false
