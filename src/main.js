@@ -48,7 +48,6 @@ let signalStatus = 'INIT'
 let lastArpRoot = 440
 const handSmooth = { x: 0, y: 0, z: 0, pinch: 0.3, spread: 0.1, depth: 0, seeded: false }
 const hand2Smooth = { x: 0, y: 0, z: 0, pinch: 0, seeded: false }
-let noHandsSince = 0
 let dualPinchStart = 0
 let dualPinchActive = false
 const LOOP_HOLD_SHORT = 420
@@ -209,7 +208,6 @@ function setupHud() {
     panelNote: document.getElementById('panel-note'),
     panelGateState: document.getElementById('panel-gate-state'),
     panelArp: document.getElementById('panel-arp'),
-    gestureGuide: document.getElementById('gesture-guide'),
   }
 }
 
@@ -446,11 +444,6 @@ function loop(now) {
     const gateOpen2 = hand2.active && hand2.pinch < 0.1
     const freqData = getFreqData()
     const landmarks = getLandmarks()
-    if (landmarks.length === 0) {
-      if (!noHandsSince) noHandsSince = now
-    } else {
-      noHandsSince = 0
-    }
     const personMask = getPersonMask()
     const currentFreq = getCurrentFrequency()
     const loopState = getLoopState()
@@ -469,7 +462,6 @@ function loop(now) {
       loopLayers,
       loopProgress: getLoopCaptureProgress(),
       landmarksCount: landmarks.length,
-      guideVisible: noHandsSince > 0 && now - noHandsSince >= 4000,
     })
 
     tickDither(freqData, gateOpen, dt, landmarks, buildHandLabels(telemetry), personMask, gridOverlay)
@@ -536,7 +528,7 @@ function buildGridOverlayData(hand, hand2, gateOpen, gateOpen2) {
   }
 }
 
-function buildTelemetry({ dt, now, hand, hand2, currentFreq, freqData, gateOpen, fxTelemetry, loopState, loopLayers, loopProgress, landmarksCount, guideVisible }) {
+function buildTelemetry({ dt, now, hand, hand2, currentFreq, freqData, gateOpen, fxTelemetry, loopState, loopLayers, loopProgress, landmarksCount }) {
   hud.pulses.instrument = Math.max(0, hud.pulses.instrument - dt * 1.35)
   hud.pulses.arp = Math.max(0, hud.pulses.arp - dt * 1.25)
   hud.pulses.mode = Math.max(0, hud.pulses.mode - dt * 1.15)
@@ -584,7 +576,6 @@ function buildTelemetry({ dt, now, hand, hand2, currentFreq, freqData, gateOpen,
     loopState,
     loopLayers,
     loopProgress,
-    guideVisible,
     sceneBanner: now < sceneBannerUntil ? sceneBanner : '',
     arpActive: isArpActive(),
     arpRoot: lastArpRoot,
@@ -675,7 +666,6 @@ function renderHud(telemetry) {
     : telemetry.loopState === 'PLAYING'
       ? `LOOP ${telemetry.loopLayers}/3`
       : telemetry.gestureState
-  if (r.gestureGuide) r.gestureGuide.classList.toggle('visible', telemetry.guideVisible)
 
   updateWaveform(telemetry)
   updateStatusMatrix(telemetry)
