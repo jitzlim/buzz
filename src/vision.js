@@ -14,13 +14,14 @@ let segmentTick    = 0
 let state = {
   attractor: { x: 0, y: 0, z: 0 },
   pinch:     0.3,
+  angle:     0,
   spread:    0.1,
   depth:     0,
   active:    false,
 }
 
 // Secondary hand (effects)
-let state2 = { attractor: { x: 0, y: 0, z: 0 }, pinch: 0.3, active: false }
+let state2 = { attractor: { x: 0, y: 0, z: 0 }, pinch: 0.3, angle: 0, active: false }
 
 // One-frame gesture flags — reset at start of each tick
 let peaceReady      = false
@@ -68,6 +69,10 @@ function calcSpread(lm) {
 function calcPinch(lm) {
   const dx = lm[4].x - lm[8].x, dy = lm[4].y - lm[8].y
   return Math.sqrt(dx * dx + dy * dy)
+}
+
+function calcPinchAngle(lm) {
+  return Math.atan2(lm[8].y - lm[4].y, lm[8].x - lm[4].x)
 }
 
 function updateGestures(lm, now) {
@@ -232,6 +237,7 @@ export function tickVision(timestamp) {
     state.spread       =  calcSpread(lm)
     const dx = thumb.x - idx.x, dy = thumb.y - idx.y
     state.pinch  = Math.sqrt(dx * dx + dy * dy)
+    state.angle  = calcPinchAngle(lm)
     state.active = true
     updateGestures(lm, timestamp)
   } else {
@@ -249,6 +255,7 @@ export function tickVision(timestamp) {
     state2.attractor.z =   idx2.z * 10
     const dx2 = thumb2.x - idx2.x, dy2 = thumb2.y - idx2.y
     state2.pinch  = Math.sqrt(dx2 * dx2 + dy2 * dy2)
+    state2.angle  = calcPinchAngle(lm2)
     state2.active = true
     updateGestures2(lm2, timestamp)
   } else {
