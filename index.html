@@ -16,11 +16,12 @@
       --font: 'JetBrains Mono', 'Inconsolata', monospace;
       --accent: #FE2C11;
       --ink: rgba(255,255,255,0.92);
-      --dim: rgba(255,255,255,0.42);
-      --faint: rgba(255,255,255,0.16);
-      --panel: rgba(0,0,0,0.34);
+      --dim: rgba(255,255,255,0.40);
+      --faint: rgba(255,255,255,0.14);
+      --panel: rgba(0,0,0,0.38);
       --panel-strong: rgba(0,0,0,0.72);
-      --scan: rgba(255,255,255,0.022);
+      --scan: rgba(0,0,0,0.07);
+      --chamfer: 8px;
     }
 
     html, body {
@@ -29,6 +30,42 @@
       color: #fff !important;
       font-family: var(--font);
       overflow: hidden;
+    }
+
+    /* ── Film grain: animated SVG noise tile, mix-blend-mode overlay ── */
+    body::after {
+      content: '';
+      position: fixed;
+      inset: -100%;
+      width: 300%;
+      height: 300%;
+      pointer-events: none;
+      z-index: 40;
+      opacity: 0.055;
+      mix-blend-mode: overlay;
+      background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 200 200' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.78' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+      animation: grain-shift 0.28s steps(1) infinite;
+    }
+
+    @keyframes grain-shift {
+      0%   { transform: translate(0%,   0%); }
+      25%  { transform: translate(-3%,  2%); }
+      50%  { transform: translate(2%,  -3%); }
+      75%  { transform: translate(-2%,  3%); }
+    }
+
+    /* ── CRT vignette: darkens corners, pulls focus inward ── */
+    #vignette {
+      position: fixed;
+      inset: 0;
+      pointer-events: none;
+      z-index: 7;
+      background: radial-gradient(
+        ellipse 82% 72% at 50% 50%,
+        transparent 22%,
+        rgba(0,0,0,0.28) 55%,
+        rgba(0,0,0,0.74) 100%
+      );
     }
 
     #dither-canvas {
@@ -72,7 +109,7 @@
       position: absolute;
       inset: 0;
       padding: clamp(18px, 2.2vw, 34px);
-      background: repeating-linear-gradient(to bottom, transparent 0 6px, var(--scan) 6px 7px);
+      background: repeating-linear-gradient(to bottom, transparent 0 4px, var(--scan) 4px 5px);
     }
 
     .rail {
@@ -112,31 +149,46 @@
       gap: 10px;
     }
 
+    /* ── Panel: chamfered corners + bevel borders ── */
     .panel {
       position: relative;
-      background: linear-gradient(180deg, rgba(0,0,0,0.11), var(--panel));
-      border: 1px solid rgba(255,255,255,0.14);
+      background: linear-gradient(145deg, rgba(255,255,255,0.038) 0%, rgba(0,0,0,0.46) 100%);
+      border: 1px solid rgba(255,255,255,0.10);
+      border-top-color: rgba(255,255,255,0.22);
+      border-left-color: rgba(255,255,255,0.17);
+      border-right-color: rgba(255,255,255,0.06);
+      border-bottom-color: rgba(255,255,255,0.05);
       padding: 11px 12px 12px;
       min-height: 44px;
       overflow: hidden;
+      /* Chamfered top-left + bottom-right corners */
+      clip-path: polygon(
+        0 var(--chamfer), var(--chamfer) 0,
+        100% 0, 100% calc(100% - var(--chamfer)),
+        calc(100% - var(--chamfer)) 100%, 0 100%
+      );
+      transition: filter 0.22s ease, border-color 0.22s ease, opacity 0.18s ease;
     }
 
+    /* Inner bevel highlight */
     .panel::before {
       content: '';
       position: absolute;
       inset: 0;
-      border-top: 1px solid rgba(255,255,255,0.05);
-      border-left: 1px solid rgba(255,255,255,0.04);
+      background: linear-gradient(135deg, rgba(255,255,255,0.042) 0%, transparent 52%);
       pointer-events: none;
     }
 
+    /* Hot state: drop-shadow follows clip-path shape */
     .panel.hot {
-      border-color: rgba(254,44,17,0.55);
-      box-shadow: 0 0 0 1px rgba(254,44,17,0.18), inset 0 0 14px rgba(254,44,17,0.06);
+      border-color: rgba(254,44,17,0.46);
+      border-top-color: rgba(254,44,17,0.82);
+      border-left-color: rgba(254,44,17,0.64);
+      filter: drop-shadow(0 0 6px rgba(254,44,17,0.22)) drop-shadow(0 0 16px rgba(254,44,17,0.08));
     }
 
     .panel.muted {
-      opacity: 0.66;
+      opacity: 0.60;
     }
 
     .meta {
@@ -156,13 +208,31 @@
       gap: 8px;
     }
 
+    /* ── Phosphor pulse on BUZZ wordmark ── */
     .title-mark {
       font-family: 'VT323', var(--font);
       font-size: clamp(28px, 4.2vw, 56px);
       line-height: 0.92;
       letter-spacing: 0.18em;
       color: var(--accent);
-      text-shadow: 0 0 18px rgba(254,44,17,0.16);
+      text-shadow:
+        0 0 22px rgba(254,44,17,0.24),
+        0 0 55px rgba(254,44,17,0.09);
+      animation: phosphor-pulse 5s ease-in-out infinite;
+    }
+
+    @keyframes phosphor-pulse {
+      0%, 100% {
+        text-shadow:
+          0 0 22px rgba(254,44,17,0.24),
+          0 0 55px rgba(254,44,17,0.09);
+      }
+      50% {
+        text-shadow:
+          0 0 32px rgba(254,44,17,0.40),
+          0 0 75px rgba(254,44,17,0.16),
+          0 0 110px rgba(254,44,17,0.05);
+      }
     }
 
     .title-sub {
@@ -187,10 +257,14 @@
       grid-template-columns: repeat(2, minmax(0, 1fr));
     }
 
+    /* ── Label with bottom rule separator ── */
     .label {
-      font-size: 8px;
-      color: var(--dim);
-      margin-bottom: 7px;
+      font-size: 7px;
+      letter-spacing: 0.30em;
+      color: rgba(255,255,255,0.26);
+      margin-bottom: 8px;
+      padding-bottom: 5px;
+      border-bottom: 1px solid rgba(255,255,255,0.07);
     }
 
     .value {
@@ -205,7 +279,7 @@
 
     .value.accent {
       color: var(--accent);
-      text-shadow: 0 0 12px rgba(254,44,17,0.22);
+      text-shadow: 0 0 14px rgba(254,44,17,0.30);
     }
 
     .row {
@@ -234,12 +308,13 @@
 
     .meter {
       height: 8px;
-      border: 1px solid rgba(255,255,255,0.14);
+      border: 1px solid rgba(255,255,255,0.11);
       background:
-        linear-gradient(to right, rgba(255,255,255,0.04), rgba(255,255,255,0.015)),
-        repeating-linear-gradient(to right, transparent 0 11px, rgba(255,255,255,0.045) 11px 12px);
+        linear-gradient(to right, rgba(0,0,0,0.48), rgba(0,0,0,0.18)),
+        repeating-linear-gradient(to right, transparent 0 11px, rgba(255,255,255,0.055) 11px 12px);
       position: relative;
       overflow: hidden;
+      margin-top: 7px;
     }
 
     .meter::after {
@@ -247,13 +322,13 @@
       position: absolute;
       inset: 0 auto 0 0;
       width: calc(var(--level, 0) * 100%);
-      background: linear-gradient(to right, rgba(255,255,255,0.4), var(--accent));
-      box-shadow: 0 0 16px rgba(254,44,17,0.35);
+      background: linear-gradient(to right, rgba(255,255,255,0.30), var(--accent));
+      box-shadow: 0 0 20px rgba(254,44,17,0.55), 0 0 5px rgba(254,44,17,0.42);
     }
 
     .meter.mono::after {
-      background: linear-gradient(to right, rgba(255,255,255,0.22), rgba(255,255,255,0.86));
-      box-shadow: 0 0 12px rgba(255,255,255,0.08);
+      background: linear-gradient(to right, rgba(255,255,255,0.18), rgba(255,255,255,0.85));
+      box-shadow: 0 0 12px rgba(255,255,255,0.14);
     }
 
     .trace-panel {
@@ -284,22 +359,25 @@
       gap: 6px;
     }
 
+    /* ── Status lights: inset recess + radial LED glow ── */
     .status-light {
       height: 10px;
-      border: 1px solid rgba(255,255,255,0.2);
-      background: rgba(255,255,255,0.06);
+      border: 1px solid rgba(255,255,255,0.18);
+      background: rgba(0,0,0,0.58);
+      border-radius: 2px;
+      box-shadow: inset 0 1px 3px rgba(0,0,0,0.75);
     }
 
     .status-light.active {
-      background: var(--accent);
-      border-color: rgba(254,44,17,0.8);
-      box-shadow: 0 0 10px rgba(254,44,17,0.34);
+      background: radial-gradient(ellipse at 50% 30%, rgba(255,105,82,0.95), rgba(254,44,17,1));
+      border-color: rgba(254,44,17,0.88);
+      box-shadow: 0 0 12px rgba(254,44,17,0.62), inset 0 0 5px rgba(255,255,255,0.22);
     }
 
     .status-light.soft {
-      background: rgba(255,255,255,0.68);
-      border-color: rgba(255,255,255,0.8);
-      box-shadow: 0 0 10px rgba(255,255,255,0.14);
+      background: radial-gradient(ellipse at 50% 30%, rgba(255,255,255,0.92), rgba(210,210,210,0.94));
+      border-color: rgba(255,255,255,0.82);
+      box-shadow: 0 0 10px rgba(255,255,255,0.22), inset 0 0 3px rgba(255,255,255,0.3);
     }
 
     .status-matrix {
@@ -309,22 +387,26 @@
       justify-content: end;
     }
 
+    /* ── Status cells: same LED treatment ── */
     .status-cell {
       width: 10px;
       height: 10px;
-      border: 1px solid rgba(255,255,255,0.22);
-      background: rgba(255,255,255,0.04);
+      border: 1px solid rgba(255,255,255,0.20);
+      background: rgba(0,0,0,0.52);
+      border-radius: 2px;
+      box-shadow: inset 0 1px 2px rgba(0,0,0,0.65);
     }
 
     .status-cell.live {
-      background: var(--accent);
-      border-color: rgba(254,44,17,0.8);
-      box-shadow: 0 0 10px rgba(254,44,17,0.3);
+      background: radial-gradient(ellipse at 50% 30%, rgba(255,105,82,0.95), rgba(254,44,17,1));
+      border-color: rgba(254,44,17,0.82);
+      box-shadow: 0 0 10px rgba(254,44,17,0.58), inset 0 0 3px rgba(255,255,255,0.20);
     }
 
     .status-cell.white {
-      background: rgba(255,255,255,0.9);
-      border-color: rgba(255,255,255,0.9);
+      background: radial-gradient(ellipse at 50% 30%, rgba(255,255,255,0.95), rgba(215,215,215,0.90));
+      border-color: rgba(255,255,255,0.90);
+      box-shadow: 0 0 8px rgba(255,255,255,0.32);
     }
 
     .summary-line {
@@ -334,6 +416,7 @@
       align-items: baseline;
       font-size: 10px;
       color: var(--dim);
+      margin-top: 6px;
     }
 
     .summary-line strong {
@@ -429,6 +512,7 @@
   <video id="webcam-video" autoplay playsinline muted></video>
   <canvas id="dither-canvas"></canvas>
   <canvas id="border-frame"></canvas>
+  <div id="vignette"></div>
 
   <div id="hud">
     <svg id="hud-svg" xmlns="http://www.w3.org/2000/svg"></svg>
@@ -440,7 +524,7 @@
           <div class="title-sub">
             <span id="title-signal">SIGNAL / INIT</span>
             <span id="title-lock">TRACK / 00%</span>
-            <span id="title-scale">LATTICE / PENTA</span>
+            <span id="title-scale">CLOCK / 120 BPM</span>
             <span id="title-fps">SCAN / 00 FPS</span>
           </div>
         </div>
