@@ -446,19 +446,7 @@
     #audio-prompt.hidden { opacity: 0; }
 
     #gesture-guide {
-      position: fixed;
-      top: 50%;
-      left: 50%;
-      width: min(420px, calc(100vw - 44px));
-      transform: translate(-50%, -50%);
-      pointer-events: none;
-      z-index: 18;
-      opacity: 0;
-      transition: opacity 0.35s ease;
-    }
-
-    #gesture-guide.visible {
-      opacity: 1;
+      opacity: 0.86;
     }
 
     .guide-grid {
@@ -627,6 +615,17 @@
               <span class="status-light"></span>
             </div>
           </div>
+          <div class="panel" id="gesture-guide">
+            <div class="label">Gesture Index</div>
+            <div class="guide-grid">
+              <div class="guide-row"><strong>Right pinch</strong><span>Gate carrier / play note</span></div>
+              <div class="guide-row"><strong>Right peace</strong><span>Cycle voice</span></div>
+              <div class="guide-row"><strong>Left hand</strong><span>Shape active FX bus</span></div>
+              <div class="guide-row"><strong>Left peace</strong><span>Short: FX mode / hold: key root</span></div>
+              <div class="guide-row"><strong>Open palm</strong><span>Toggle arp latch</span></div>
+              <div class="guide-row"><strong>Dual pinch</strong><span>Short: add loop / long: clear loops</span></div>
+            </div>
+          </div>
         </div>
       </div>
 
@@ -685,18 +684,6 @@
           </div>
         </div>
       </div>
-    </div>
-  </div>
-
-  <div class="panel" id="gesture-guide">
-    <div class="label">Gesture Index</div>
-    <div class="guide-grid">
-      <div class="guide-row"><strong>Right pinch</strong><span>Gate carrier / play note</span></div>
-      <div class="guide-row"><strong>Right peace</strong><span>Cycle voice</span></div>
-      <div class="guide-row"><strong>Left hand</strong><span>Shape active FX bus</span></div>
-      <div class="guide-row"><strong>Left peace</strong><span>Release short: FX mode / hold: key root</span></div>
-      <div class="guide-row"><strong>Open palm</strong><span>Toggle arp latch</span></div>
-      <div class="guide-row"><strong>Dual pinch</strong><span>Short: add loop / long: clear loops</span></div>
     </div>
   </div>
 
