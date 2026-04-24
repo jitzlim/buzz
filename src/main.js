@@ -44,6 +44,8 @@ let frameCount = 0
 let lastFpsTime = 0
 let fpsValue = 0
 let audioStarted = false
+let audioUnlocking = false
+let audioInitialized = false
 let signalStatus = 'INIT'
 let lastArpRoot = 440
 const handSmooth = { x: 0, y: 0, z: 0, pinch: 0.3, angle: 0, spread: 0.1, depth: 0, seeded: false }
@@ -255,18 +257,36 @@ async function init() {
   }
 }
 
-document.addEventListener('click', async function unlockAudio() {
-  if (audioStarted) return
-  audioStarted = true
+async function unlockAudio() {
+  if (audioStarted || audioUnlocking) return
+  audioUnlocking = true
   try {
-    initAudio()
+    if (!audioInitialized) {
+      initAudio()
+      audioInitialized = true
+    }
     await startAudio()
+    audioStarted = true
     const prompt = document.getElementById('audio-prompt')
     if (prompt) prompt.classList.add('hidden')
+    removeAudioUnlockListeners()
   } catch {
+    audioStarted = false
     setSignalStatus('AUDIO ERROR')
+  } finally {
+    audioUnlocking = false
   }
-}, { once: true })
+}
+
+function removeAudioUnlockListeners() {
+  document.removeEventListener('pointerdown', unlockAudio)
+  document.removeEventListener('touchend', unlockAudio)
+  document.removeEventListener('click', unlockAudio)
+}
+
+document.addEventListener('pointerdown', unlockAudio, { passive: true })
+document.addEventListener('touchend', unlockAudio, { passive: true })
+document.addEventListener('click', unlockAudio, { passive: true })
 
 function loop(now) {
   requestAnimationFrame(loop)

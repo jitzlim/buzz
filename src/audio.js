@@ -267,6 +267,14 @@ export function initAudio() {
 
 export async function startAudio() {
   await Tone.start()
+  const context = Tone.getContext()
+  if (context?.state !== 'running' && typeof context?.resume === 'function') {
+    await context.resume()
+  }
+  const rawContext = context?.rawContext
+  if (rawContext?.state !== 'running' && typeof rawContext?.resume === 'function') {
+    await rawContext.resume()
+  }
   audioStarted = true
   // Don't auto-attack — wait for first pinch
 }
