@@ -2,24 +2,25 @@ import {
   initAudio, startAudio,
   setFrequency, setVolume, setPinchGate, getFreqData,
   nextInstrument, getCurrentInstrumentName, getCurrentFrequency,
-  getCurrentScaleName, getTempoBpm, getDelayDivisionLabel, setTempoFromNorm,
-  getLoopState, getLoopCaptureProgress, captureOneBarLoop, clearLoop,
+  getCurrentScaleName, getKeyLabel, cycleRootNote, getTempoBpm, getDelayDivisionLabel, setTempoFromNorm,
+  getLoopState, getLoopLayerCount, getLoopCaptureProgress, captureOneBarLoop, clearLoop,
   getSceneState, applySceneState,
   setDelayPitchMix,
   toggleArp, isArpActive,
   setBitcrush, setDrive, setStutter, setTransitionMacro, setReverbFreeze,
   setFilterCutoff, setFilterQ, setReverbWet,
   setVibrato, setVibratoRate, setDelay,
+  setChordMode, setChordShape, getChordState, isBassInstrument,
 } from './audio.js'
 import {
   initVision, tickVision,
   getHandState, getHandState2, getLandmarks, getPersonMask,
-  checkPeaceGesture, checkArpToggleGesture, checkPeaceGestureHand2,
+  checkPeaceGesture, checkArpToggleGesture, checkPeaceGestureHand2, checkRootCycleGesture,
 } from './vision.js'
 import { initDither, tickDither } from './dither.js'
 
 const NOTE_NAMES = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B']
-const LEFT_FX_MODES = ['ECHO', 'SPACE', 'FILTER', 'PERF']
+const LEFT_FX_MODES = ['ECHO', 'SPACE', 'FILTER', 'PERF', 'CHORD']
 
 const hud = {
   refs: null,
@@ -45,7 +46,9 @@ let fpsValue = 0
 let audioStarted = false
 let signalStatus = 'INIT'
 let lastArpRoot = 440
+const handSmooth = { x: 0, y: 0, z: 0, pinch: 0.3, spread: 0.1, depth: 0, seeded: false }
 const hand2Smooth = { x: 0, y: 0, z: 0, pinch: 0, seeded: false }
+let noHandsSince = 0
 let dualPinchStart = 0
 let dualPinchActive = false
 const LOOP_HOLD_SHORT = 420
@@ -104,6 +107,58 @@ function gateLabel(pinch) {
   return 'THRESHOLD'
 }
 
+function smoothPrimaryHand(hand, dt) {
+  if (!hand.active) {
+    handSmooth.seeded = false
+    return { ...hand }
+  }
+
+  if (!handSmooth.seeded) {
+    handSmooth.x = hand.attractor.x
+    handSmooth.y = hand.attractor.y
+    handSmooth.z = hand.attractor.z
+    handSmooth.pinch = hand.pinch
+    handSmooth.spread = hand.spread
+    handSmooth.depth = hand.depth
+    handSmooth.seeded = true
+  } else {
+    handSmooth.x = smooth(handSmooth.x, hand.attractor.x, dt, 7, 6)
+    handSmooth.y = smooth(handSmooth.y, hand.attractor.y, dt, 7, 6)
+    handSmooth.z = smooth(handSmooth.z, hand.attractor.z, dt, 7, 6)
+    handSmooth.pinch = smooth(handSmooth.pinch, hand.pinch, dt, 10, 8)
+    handSmooth.spread = smooth(handSmooth.spread, hand.spread, dt, 6, 5)
+    handSmooth.depth = smooth(handSmooth.depth, hand.depth, dt, 6, 5)
+  }
+
+  return {
+    ...hand,
+    attractor: { x: handSmooth.x, y: handSmooth.y, z: handSmooth.z },
+    pinch: handSmooth.pinch,
+    spread: handSmooth.spread,
+    depth: handSmooth.depth,
+  }
+}
+
+function frequencyFromHand(hand) {
+  if (isBassInstrument()) {
+    return 40 + ((hand.attractor.y + 2) / 4) * 240
+  }
+  return 100 + ((hand.attractor.y + 2) / 4) * 1100
+}
+
+function buildChordTelemetry(envelope = 0) {
+  const chord = getChordState()
+  return {
+    mode: 'CHORD',
+    envelope,
+    row1: ['Density', `${chord.density}/3`],
+    row2: ['Tint', chord.tint],
+    row3: ['Spread', `${chord.spread}`],
+    summary: 'CHORD VOICE',
+    summaryValue: chord.density ? `${chord.density + 1} NOTE` : 'MONO',
+  }
+}
+
 function setupHud() {
   hud.refs = {
     titleSignal: document.getElementById('title-signal'),
@@ -154,6 +209,7 @@ function setupHud() {
     panelNote: document.getElementById('panel-note'),
     panelGateState: document.getElementById('panel-gate-state'),
     panelArp: document.getElementById('panel-arp'),
+    gestureGuide: document.getElementById('gesture-guide'),
   }
 }
 
@@ -201,8 +257,8 @@ function loop(now) {
 
     const hand = getHandState()
     const hand2 = getHandState2()
-    const { attractor, pinch, spread, depth, active } = hand
-    const loopState = getLoopState()
+    const controlHand = smoothPrimaryHand(hand, dt)
+    const { attractor, pinch, spread, depth, active } = controlHand
 
     let fxTelemetry = {
       mode: LEFT_FX_MODES[leftFxMode],
@@ -217,6 +273,7 @@ function loop(now) {
     if (audioStarted) {
     const peacePrimary = checkPeaceGesture()
     const peaceSecondary = checkPeaceGestureHand2()
+    const rootCycle = checkRootCycleGesture()
     if (peacePrimary && peaceSecondary) {
       handleSceneGesture(now, active, attractor)
       hud.pulses.mode = 1
@@ -225,8 +282,13 @@ function loop(now) {
       nextInstrument()
       hud.pulses.instrument = 1
     }
+    if (rootCycle) {
+      const root = cycleRootNote()
+      pushSceneBanner(`KEY ROOT ${root}`, now)
+      hud.pulses.mode = 1
+    }
     if (checkArpToggleGesture()) {
-      lastArpRoot = active ? 100 + ((attractor.y + 2) / 4) * 1100 : 440
+      lastArpRoot = active ? frequencyFromHand(controlHand) : 440
       toggleArp(lastArpRoot)
       hud.pulses.arp = 1
     }
@@ -236,10 +298,11 @@ function loop(now) {
     }
     }
 
-    handleLoopGesture(now, hand, hand2, audioStarted)
+    handleLoopGesture(now, controlHand, hand2, audioStarted)
+    setChordMode(leftFxMode === 4)
 
     if (active && audioStarted) {
-    const freq = 100 + ((attractor.y + 2) / 4) * 1100
+    const freq = frequencyFromHand(controlHand)
     setFrequency(freq)
     setPinchGate(pinch)
     setVolume(1 - Math.min(pinch / 0.3, 1))
@@ -361,28 +424,52 @@ function loop(now) {
         summary: 'PERF MACRO',
         summaryValue: `${Math.round(macro * 100)}%`,
       }
+      } else if (leftFxMode === 4) {
+        setDelayPitchMix(0)
+      setReverbFreeze(false)
+      setBitcrush(0)
+      setDrive(0)
+      setStutter(0.2, 0)
+      const spreadNorm = clamp((y2 + 2) / 4, 0, 1)
+      const tintNorm = clamp((x2 + 3) / 6, 0, 1)
+      const densityNorm = clamp(1 - Math.min(p2 / 0.3, 1), 0, 1)
+      setChordShape({ spread: spreadNorm, tint: tintNorm, density: densityNorm })
+      fxTelemetry = buildChordTelemetry(densityNorm)
       }
+    }
+
+    if (leftFxMode === 4 && (!hand2.active || !audioStarted)) {
+      fxTelemetry = buildChordTelemetry(getChordState().density / 3)
     }
 
     const gateOpen = active && pinch < 0.1
     const gateOpen2 = hand2.active && hand2.pinch < 0.1
     const freqData = getFreqData()
     const landmarks = getLandmarks()
+    if (landmarks.length === 0) {
+      if (!noHandsSince) noHandsSince = now
+    } else {
+      noHandsSince = 0
+    }
     const personMask = getPersonMask()
     const currentFreq = getCurrentFrequency()
-    const gridOverlay = buildGridOverlayData(hand, hand2, gateOpen, gateOpen2)
+    const loopState = getLoopState()
+    const loopLayers = getLoopLayerCount()
+    const gridOverlay = buildGridOverlayData(controlHand, hand2, gateOpen, gateOpen2)
     const telemetry = buildTelemetry({
       dt,
       now,
-      hand,
+      hand: controlHand,
       hand2,
       currentFreq,
       freqData,
       gateOpen,
       fxTelemetry,
       loopState,
+      loopLayers,
       loopProgress: getLoopCaptureProgress(),
       landmarksCount: landmarks.length,
+      guideVisible: noHandsSince > 0 && now - noHandsSince >= 4000,
     })
 
     tickDither(freqData, gateOpen, dt, landmarks, buildHandLabels(telemetry), personMask, gridOverlay)
@@ -449,7 +536,7 @@ function buildGridOverlayData(hand, hand2, gateOpen, gateOpen2) {
   }
 }
 
-function buildTelemetry({ dt, now, hand, hand2, currentFreq, freqData, gateOpen, fxTelemetry, loopState, loopProgress, landmarksCount }) {
+function buildTelemetry({ dt, now, hand, hand2, currentFreq, freqData, gateOpen, fxTelemetry, loopState, loopLayers, loopProgress, landmarksCount, guideVisible }) {
   hud.pulses.instrument = Math.max(0, hud.pulses.instrument - dt * 1.35)
   hud.pulses.arp = Math.max(0, hud.pulses.arp - dt * 1.25)
   hud.pulses.mode = Math.max(0, hud.pulses.mode - dt * 1.15)
@@ -481,6 +568,7 @@ function buildTelemetry({ dt, now, hand, hand2, currentFreq, freqData, gateOpen,
     fps: fpsValue,
     instrument: getCurrentInstrumentName(),
     scale: getCurrentScaleName(),
+    key: getKeyLabel(),
     mode: LEFT_FX_MODES[leftFxMode],
     currentFreq,
     tempoBpm: getTempoBpm(),
@@ -494,7 +582,9 @@ function buildTelemetry({ dt, now, hand, hand2, currentFreq, freqData, gateOpen,
     presence: hud.meters.presence,
     fx: fxTelemetry,
     loopState,
+    loopLayers,
     loopProgress,
+    guideVisible,
     sceneBanner: now < sceneBannerUntil ? sceneBanner : '',
     arpActive: isArpActive(),
     arpRoot: lastArpRoot,
@@ -543,7 +633,7 @@ function renderHud(telemetry) {
 
   r.titleSignal.textContent = `SIGNAL / ${telemetry.signal}`
   r.titleLock.textContent = `TRACK / ${Math.round(telemetry.lock * 100)}%`
-  r.titleScale.textContent = `CLOCK / ${telemetry.tempoBpm} BPM`
+  r.titleScale.textContent = `KEY / ${telemetry.key}`
   r.titleFps.textContent = `SCAN / ${String(telemetry.fps).padStart(2, '0')} FPS`
   r.topVoice.textContent = telemetry.instrument
   r.topMode.textContent = telemetry.mode
@@ -575,7 +665,7 @@ function renderHud(telemetry) {
   r.bottomArp.textContent = telemetry.arpActive ? `ONLINE ${freqToNote(telemetry.arpRoot)}` : 'OFFLINE'
   r.bottomMode.textContent = `${telemetry.mode} CHAMBER`
   r.bottomVoice.textContent = telemetry.instrument
-  r.bottomScale.textContent = telemetry.scale
+  r.bottomScale.textContent = `${telemetry.key} / ${telemetry.tempoBpm} BPM`
   r.energyBass.textContent = `${Math.round(telemetry.bass * 100)}%`
   r.energyPresence.textContent = `${Math.round(telemetry.presence * 100)}%`
   r.energyGesture.textContent = telemetry.loopState === 'RECORDING'
@@ -583,8 +673,9 @@ function renderHud(telemetry) {
     : telemetry.sceneBanner
       ? telemetry.sceneBanner
     : telemetry.loopState === 'PLAYING'
-      ? 'LOOP PLAYING'
+      ? `LOOP ${telemetry.loopLayers}/3`
       : telemetry.gestureState
+  if (r.gestureGuide) r.gestureGuide.classList.toggle('visible', telemetry.guideVisible)
 
   updateWaveform(telemetry)
   updateStatusMatrix(telemetry)
@@ -593,7 +684,7 @@ function renderHud(telemetry) {
   setPanelState(r.panelTrack, telemetry.hand.active || telemetry.hand2.active, telemetry.lock < 0.45)
   setPanelState(r.panelPrimary, telemetry.hand.active, !telemetry.hand.active)
   setPanelState(r.panelGate, telemetry.gateOpen, !telemetry.hand.active)
-  setPanelState(r.panelFx, telemetry.hand2.active || hud.pulses.mode > 0.1, !telemetry.hand2.active)
+  setPanelState(r.panelFx, telemetry.hand2.active || telemetry.mode === 'CHORD' || hud.pulses.mode > 0.1, !telemetry.hand2.active && telemetry.mode !== 'CHORD')
   setPanelState(r.panelMode, telemetry.hand2.active || hud.pulses.mode > 0.1, false)
   setPanelState(r.panelVoice, hud.pulses.instrument > 0.1 || telemetry.hand.active, false)
   setPanelState(r.panelCarrier, telemetry.hand.active || telemetry.arpActive, false)

@@ -23,9 +23,10 @@ let state = {
 let state2 = { attractor: { x: 0, y: 0, z: 0 }, pinch: 0.3, active: false }
 
 // One-frame gesture flags — reset at start of each tick
-let peaceReady     = false
-let arpToggleReady = false
-let peace2Ready    = false
+let peaceReady      = false
+let arpToggleReady  = false
+let peace2Ready     = false
+let rootCycleReady  = false
 
 // --- Right-hand peace sign (instrument cycle) ---
 const PEACE_COOLDOWN = 1100
@@ -35,7 +36,9 @@ let peaceCooldown = 0, peaceStartT = 0, peaceFired = false
 // --- Left-hand peace sign (FX mode cycle) ---
 const PEACE2_COOLDOWN = 1300
 const PEACE2_HOLD     = 260
+const ROOT_HOLD       = 650
 let peace2Cooldown = 0, peace2StartT = 0, peace2Fired = false
+let rootCycleFired = false
 
 // --- Open palm hold (arp toggle) ---
 const PALM_HOLD    = 600
@@ -99,14 +102,20 @@ function updateGestures2(lm2, now) {
 
   if (isPeace2) {
     if (!peace2StartT) peace2StartT = now
-    if (!peace2Fired && (now - peace2StartT) >= PEACE2_HOLD && now > peace2Cooldown) {
-      peace2Ready = true
-      peace2Fired = true
+    if (!rootCycleFired && (now - peace2StartT) >= ROOT_HOLD && now > peace2Cooldown) {
+      rootCycleReady = true
+      rootCycleFired = true
       peace2Cooldown = now + PEACE2_COOLDOWN
     }
   } else {
+    const hold = peace2StartT ? now - peace2StartT : 0
+    if (!peace2Fired && !rootCycleFired && hold >= PEACE2_HOLD && hold < ROOT_HOLD && now > peace2Cooldown) {
+      peace2Ready = true
+      peace2Cooldown = now + PEACE2_COOLDOWN
+    }
     peace2StartT = 0
     peace2Fired = false
+    rootCycleFired = false
   }
 }
 
@@ -147,7 +156,7 @@ export async function initVision(videoEl) {
 }
 
 export function tickVision(timestamp) {
-  peaceReady = arpToggleReady = peace2Ready = false
+  peaceReady = arpToggleReady = peace2Ready = rootCycleReady = false
 
   if (!handLandmarker) return
   if (timestamp <= lastTimestamp) return
@@ -185,7 +194,7 @@ export function tickVision(timestamp) {
   if (!results.landmarks || results.landmarks.length === 0) {
     state.active = false; state2.active = false
     peaceStartT = 0; peaceFired = false
-    peace2StartT = 0; peace2Fired = false
+    peace2StartT = 0; peace2Fired = false; rootCycleFired = false
     wasPalm = false
     rawLandmarks = []
     return
@@ -246,6 +255,7 @@ export function tickVision(timestamp) {
     state2.active = false
     peace2StartT = 0
     peace2Fired = false
+    rootCycleFired = false
   }
 }
 
@@ -257,3 +267,4 @@ export function getPersonMask()          { return { data: personMask, width: per
 export function checkPeaceGesture()       { return peaceReady      }
 export function checkArpToggleGesture()   { return arpToggleReady  }
 export function checkPeaceGestureHand2()  { return peace2Ready     }
+export function checkRootCycleGesture()   { return rootCycleReady  }
