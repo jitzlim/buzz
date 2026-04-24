@@ -10,7 +10,7 @@ import {
   setBitcrush, setDrive, setStutter, setTransitionMacro, setReverbFreeze,
   setFilterCutoff, setFilterQ, setReverbWet,
   setVibrato, setVibratoRate, setDelay,
-  setChordMode, setChordShape, getChordState, isBassInstrument,
+  setChordMode, setChordShape, getChordState, isBassInstrument, playUnlockCue,
 } from './audio.js'
 import {
   initVision, tickVision,
@@ -261,11 +261,12 @@ async function unlockAudio() {
   if (audioStarted || audioUnlocking) return
   audioUnlocking = true
   try {
+    await startAudio()
     if (!audioInitialized) {
       initAudio()
       audioInitialized = true
     }
-    await startAudio()
+    playUnlockCue()
     audioStarted = true
     const prompt = document.getElementById('audio-prompt')
     if (prompt) prompt.classList.add('hidden')

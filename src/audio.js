@@ -279,6 +279,18 @@ export async function startAudio() {
   // Don't auto-attack — wait for first pinch
 }
 
+export function playUnlockCue() {
+  try {
+    const cue = new Tone.Synth({
+      oscillator: { type: 'sine' },
+      envelope: { attack: 0.001, decay: 0.04, sustain: 0, release: 0.04 },
+    }).toDestination()
+    cue.volume.value = -18
+    cue.triggerAttackRelease('C5', 0.05, Tone.now())
+    setTimeout(() => cue.dispose(), 180)
+  } catch {}
+}
+
 // Called every frame with current pinch value
 export function setPinchGate(pinch) {
   if (!synth || !audioStarted || arpActive) return
