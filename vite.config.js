@@ -15,7 +15,6 @@ export default defineConfig({
     rollupOptions: {
       output: {
         manualChunks: {
-          three: ['three'],
           tone: ['tone'],
         },
       },

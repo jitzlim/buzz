@@ -8,20 +8,28 @@ const SCALES = {
   FREE:  null,
 }
 const SCALE_NAMES = Object.keys(SCALES)
+const ROOT_NAMES = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B']
 let scaleIndex = 0
+let rootSemitone = 0
 
 function quantizeHz(hz) {
   const scale = SCALES[SCALE_NAMES[scaleIndex]]
   if (!scale) return hz
   const midi = 12 * Math.log2(hz / 440) + 69
-  const octave = Math.floor(midi / 12)
-  const pc = ((midi % 12) + 12) % 12
-  let best = scale[0], bestDist = Infinity
-  for (const deg of scale) {
-    const d = Math.min(Math.abs(pc - deg), 12 - Math.abs(pc - deg))
-    if (d < bestDist) { bestDist = d; best = deg }
+  const rounded = Math.round(midi)
+  let bestMidi = rounded
+  let bestDist = Infinity
+  for (let candidate = rounded - 12; candidate <= rounded + 12; candidate++) {
+    const pc = ((candidate % 12) + 12) % 12
+    const inScale = scale.some(deg => pc === ((rootSemitone + deg) % 12))
+    if (!inScale) continue
+    const dist = Math.abs(midi - candidate)
+    if (dist < bestDist) {
+      bestDist = dist
+      bestMidi = candidate
+    }
   }
-  return 440 * Math.pow(2, (octave * 12 + best - 69) / 12)
+  return 440 * Math.pow(2, (bestMidi - 69) / 12)
 }
 
 // --- Instruments (default = DUO for richness) ---
@@ -59,6 +67,16 @@ const INSTRUMENTS = [
       filterEnvelope: { attack: 0.02, decay: 0.15, sustain: 0.5, release: 0.2, baseFrequency: 300, octaves: 3 },
     }),
   },
+  {
+    name: 'BASS',
+    lowRange: true,
+    make: () => new Tone.MonoSynth({
+      oscillator: { type: 'square' },
+      filter: { Q: 1.5, type: 'lowpass', rolloff: -24 },
+      envelope: { attack: 0.015, decay: 0.12, sustain: 0.82, release: 0.32 },
+      filterEnvelope: { attack: 0.01, decay: 0.22, sustain: 0.25, release: 0.18, baseFrequency: 90, octaves: 2.2 },
+    }),
+  },
 ]
 
 let currentIndex = 0
@@ -73,11 +91,14 @@ let tremolo      = null
 let pitchShift   = null
 let analyser     = null
 let masterBus    = null
+let chordVoice1  = null
+let chordVoice2  = null
 let arpPattern   = null
 let arpActive    = false
 let currentFreq  = 440
 let audioStarted = false
 let gateOpen     = false   // true = note is currently held
+let chordActive   = false
 let currentBpm   = 120
 const DELAY_DIVISIONS = [
   { label: '1/16', mult: 0.25 },
@@ -89,12 +110,13 @@ const DELAY_DIVISIONS = [
 ]
 let delayDivisionIndex = 2
 let recorder = null
-let loopPlayer = null
+const MAX_LOOP_LAYERS = 3
+const loopLayers = []
 let loopState = 'IDLE'
 let loopCaptureTimer = null
 let loopCaptureStartMs = 0
 let loopCaptureEndMs = 0
-let loopBlobUrl = null
+let pendingLoopLayer = null
 let filterCutoffNorm = (3000 - 200) / 7800
 let filterQValue = 1
 let reverbWetValue = 0.5
@@ -110,6 +132,11 @@ let pitchShiftValue = 0
 let stutterDepthValue = 0
 let stutterRateValue = 8
 let freezeActive = false
+let chordModeActive = false
+let chordDensity = 0
+let chordThird = 4
+let chordSpread = 0
+let chordLevel = 0
 
 function applyDelaySyncTime(ramp = 0.05) {
   if (!delay) return
@@ -120,6 +147,78 @@ function applyDelaySyncTime(ramp = 0.05) {
 
 function buildChain() {
   synth.chain(vibrato, filter, bitcrusher, drive, tremolo, pitchShift, delay, reverb, masterBus)
+}
+
+function makeChordVoice() {
+  return new Tone.Synth({
+    oscillator: { type: 'triangle' },
+    envelope: { attack: 0.035, decay: 0.08, sustain: 0.58, release: 0.42 },
+  })
+}
+
+function connectChordVoices() {
+  chordVoice1 = makeChordVoice()
+  chordVoice2 = makeChordVoice()
+  chordVoice1.chain(vibrato)
+  chordVoice2.chain(vibrato)
+  chordVoice1.volume.value = -10
+  chordVoice2.volume.value = -12
+}
+
+function releaseChordVoices() {
+  if (chordVoice1) chordVoice1.triggerRelease()
+  if (chordVoice2) chordVoice2.triggerRelease()
+  chordActive = false
+}
+
+function disposeChordVoices() {
+  releaseChordVoices()
+  if (chordVoice1) {
+    chordVoice1.disconnect()
+    chordVoice1.dispose()
+    chordVoice1 = null
+  }
+  if (chordVoice2) {
+    chordVoice2.disconnect()
+    chordVoice2.dispose()
+    chordVoice2 = null
+  }
+}
+
+function chordFrequencies(root) {
+  const fifth = root * Math.pow(2, (7 + chordSpread) / 12)
+  const third = root * Math.pow(2, (chordThird + chordSpread * 0.5) / 12)
+  const seventh = root * Math.pow(2, (10 + chordSpread) / 12)
+  if (chordDensity <= 1) return [root, fifth]
+  if (chordDensity === 2) return [root, third, fifth]
+  return [root, third, seventh]
+}
+
+function syncChordFrequencies(ramp = 0.04) {
+  if (!chordVoice1 || !chordVoice2) return
+  const [, voice1Freq, voice2Freq] = chordFrequencies(currentFreq)
+  chordVoice1.frequency.rampTo(voice1Freq || currentFreq, ramp)
+  chordVoice2.frequency.rampTo(voice2Freq || voice1Freq || currentFreq, ramp)
+}
+
+function shouldUseChordVoices() {
+  return chordModeActive && chordDensity > 0 && !arpActive
+}
+
+function playChordVoices() {
+  if (!chordVoice1 || !chordVoice2 || !shouldUseChordVoices()) return
+  const [, voice1Freq, voice2Freq] = chordFrequencies(currentFreq)
+  chordVoice1.volume.rampTo(chordLevel <= 0.66 ? -11 : -9, 0.05)
+  chordVoice1.triggerAttack(voice1Freq || currentFreq)
+  if (chordDensity >= 2) {
+    chordVoice2.volume.rampTo(chordDensity >= 3 ? -10 : -13, 0.05)
+    chordVoice2.triggerAttack(voice2Freq || voice1Freq || currentFreq)
+  }
+  chordActive = true
+}
+
+function currentInstrument() {
+  return INSTRUMENTS[currentIndex]
 }
 
 export function initAudio() {
@@ -146,6 +245,7 @@ export function initAudio() {
 
   synth = INSTRUMENTS[currentIndex].make()
   buildChain()
+  connectChordVoices()
   Tone.getDestination().volume.value = -8
   Tone.Transport.bpm.value = currentBpm
   applyDelaySyncTime(0.01)
@@ -178,10 +278,16 @@ export function setPinchGate(pinch) {
   const shouldClose = pinch > 0.15
   if (shouldOpen && !gateOpen) {
     synth.triggerAttack(currentFreq)
+    playChordVoices()
     gateOpen = true
   } else if (shouldClose && gateOpen) {
     synth.triggerRelease()
+    releaseChordVoices()
     gateOpen = false
+  } else if (gateOpen && chordActive && !shouldUseChordVoices()) {
+    releaseChordVoices()
+  } else if (gateOpen && !chordActive && shouldUseChordVoices()) {
+    playChordVoices()
   }
 }
 
@@ -189,6 +295,7 @@ export function nextInstrument() {
   if (!synth || !audioStarted) return
   if (arpActive) { stopArp() }
   if (gateOpen) { synth.triggerRelease(); gateOpen = false }
+  releaseChordVoices()
   synth.disconnect()
   synth.dispose()
 
@@ -205,6 +312,7 @@ export function setInstrumentIndex(index) {
   if (safe === currentIndex) return
   if (arpActive) { stopArp() }
   if (gateOpen) { synth.triggerRelease(); gateOpen = false }
+  releaseChordVoices()
   synth.disconnect()
   synth.dispose()
   currentIndex = safe
@@ -221,11 +329,27 @@ export function setScaleIndex(index) {
   const safe = Math.max(0, Math.min(SCALE_NAMES.length - 1, index | 0))
   scaleIndex = safe
 }
+export function cycleRootNote() {
+  rootSemitone = (rootSemitone + 1) % ROOT_NAMES.length
+  return ROOT_NAMES[rootSemitone]
+}
+export function getRootName() { return ROOT_NAMES[rootSemitone] }
+export function getRootIndex() { return rootSemitone }
+export function setRootIndex(index) {
+  rootSemitone = Math.max(0, Math.min(ROOT_NAMES.length - 1, index | 0))
+}
+export function getKeyLabel() {
+  return `${ROOT_NAMES[rootSemitone]} ${SCALE_NAMES[scaleIndex]}`
+}
+export function isBassInstrument() {
+  return Boolean(currentInstrument()?.lowRange)
+}
 
 function stopArp() {
   if (arpPattern) { arpPattern.stop(); arpPattern.dispose(); arpPattern = null }
   Tone.Transport.stop()
   arpActive = false
+  if (gateOpen) playChordVoices()
 }
 
 export function toggleArp(rootFreq) {
@@ -236,9 +360,10 @@ export function toggleArp(rootFreq) {
   }
 
   if (gateOpen) { synth.triggerRelease(); gateOpen = false }
+  releaseChordVoices()
 
   const scale = SCALES[SCALE_NAMES[scaleIndex]] || SCALES.PENTA
-  const root  = 440 * Math.pow(2, Math.round(12 * Math.log2(rootFreq / 440)) / 12)
+  const root  = quantizeHz(rootFreq)
   const notes = scale.map(deg => root * Math.pow(2, deg / 12))
     .concat(scale.map(deg => root * Math.pow(2, (deg + 12) / 12)))
 
@@ -257,9 +382,41 @@ export function getCurrentFrequency() { return currentFreq }
 
 export function setFrequency(hz) {
   if (!synth) return
-  currentFreq = Math.max(80, Math.min(1200, quantizeHz(hz)))
+  const min = isBassInstrument() ? 40 : 80
+  const max = isBassInstrument() ? 280 : 1200
+  currentFreq = Math.max(min, Math.min(max, quantizeHz(hz)))
   if (gateOpen || arpActive) {
     synth.frequency.rampTo(currentFreq, 0.04)
+    syncChordFrequencies(0.04)
+  }
+}
+
+export function setChordMode(active) {
+  chordModeActive = Boolean(active)
+  if (!chordModeActive) releaseChordVoices()
+}
+
+export function setChordShape({ spread = chordSpread, tint = 0.66, density = chordDensity } = {}) {
+  chordSpread = Math.round(Math.max(0, Math.min(1, spread)) * 12)
+  chordThird = tint < 0.34 ? 7 : tint < 0.67 ? 3 : 4
+  chordLevel = Math.max(0, Math.min(1, density))
+  chordDensity = Math.max(0, Math.min(3, Math.round(chordLevel * 3)))
+  if (gateOpen) {
+    if (shouldUseChordVoices()) {
+      if (!chordActive) playChordVoices()
+      syncChordFrequencies(0.06)
+    } else {
+      releaseChordVoices()
+    }
+  }
+}
+
+export function getChordState() {
+  return {
+    active: chordModeActive,
+    density: chordDensity,
+    spread: chordSpread,
+    tint: chordThird === 7 ? 'FIFTH' : chordThird === 3 ? 'MINOR' : 'MAJOR',
   }
 }
 
@@ -267,7 +424,7 @@ export function setVolume(norm) {
   if (!synth) return
   const clamped = Math.max(0, Math.min(1, norm))
   const db = clamped < 0.01 ? -Infinity : Tone.gainToDb(clamped) - 4
-  Tone.getDestination().volume.rampTo(db, 0.05)
+  synth.volume.rampTo(db, 0.05)
 }
 
 export function setFilterCutoff(norm) {
@@ -389,6 +546,7 @@ export function getSceneState() {
     return {
       instrumentIndex: currentIndex,
       scaleIndex,
+      rootSemitone,
       bpm: currentBpm,
       delayDivisionIndex,
       filterCutoffNorm,
@@ -406,6 +564,10 @@ export function getSceneState() {
       pitchShiftValue,
       stutterDepthValue,
       stutterRateValue,
+      chordModeActive,
+      chordDensity,
+      chordThird,
+      chordSpread,
     }
   } catch {
     return null
@@ -417,6 +579,7 @@ export function applySceneState(scene) {
   try {
     if (typeof scene.instrumentIndex === 'number') setInstrumentIndex(scene.instrumentIndex)
     if (typeof scene.scaleIndex === 'number') setScaleIndex(scene.scaleIndex)
+    if (typeof scene.rootSemitone === 'number') setRootIndex(scene.rootSemitone)
     if (typeof scene.bpm === 'number') {
       const bpmNorm = (Math.max(70, Math.min(170, scene.bpm)) - 70) / 100
       setTempoFromNorm(bpmNorm)
@@ -438,6 +601,12 @@ export function applySceneState(scene) {
     if (typeof scene.vibratoDepthValue === 'number') setVibrato(scene.vibratoDepthValue)
     if (typeof scene.vibratoRateValue === 'number') setVibratoRate(scene.vibratoRateValue)
     if (typeof scene.freezeActive === 'boolean') setReverbFreeze(scene.freezeActive)
+    if (typeof scene.chordModeActive === 'boolean') setChordMode(scene.chordModeActive)
+    if (typeof scene.chordDensity === 'number' || typeof scene.chordThird === 'number' || typeof scene.chordSpread === 'number') {
+      chordDensity = Math.max(0, Math.min(3, scene.chordDensity ?? chordDensity))
+      chordThird = scene.chordThird ?? chordThird
+      chordSpread = Math.max(0, Math.min(12, scene.chordSpread ?? chordSpread))
+    }
     return true
   } catch {
     return false
@@ -451,28 +620,30 @@ async function finalizeLoopCapture() {
   try {
     recording = await recorder.stop()
   } catch {
-    loopState = loopPlayer ? 'PLAYING' : 'IDLE'
+    loopState = loopLayers.length ? 'PLAYING' : 'IDLE'
     return false
   }
   if (!recording) {
-    loopState = loopPlayer ? 'PLAYING' : 'IDLE'
+    loopState = loopLayers.length ? 'PLAYING' : 'IDLE'
     return false
   }
 
-  if (loopPlayer) {
-    try { loopPlayer.stop() } catch {}
-    loopPlayer.dispose()
-    loopPlayer = null
-  }
-  if (loopBlobUrl) {
-    URL.revokeObjectURL(loopBlobUrl)
-    loopBlobUrl = null
+  if (loopLayers.length >= MAX_LOOP_LAYERS) {
+    const oldest = loopLayers.shift()
+    if (oldest) {
+      try { oldest.player.stop() } catch {}
+      oldest.player.dispose()
+      URL.revokeObjectURL(oldest.url)
+    }
   }
 
-  loopBlobUrl = URL.createObjectURL(recording)
-  loopPlayer = new Tone.Player({ loop: true, fadeIn: 0.01, fadeOut: 0.02 }).connect(masterBus)
-  await loopPlayer.load(loopBlobUrl)
-  loopPlayer.start()
+  const url = URL.createObjectURL(recording)
+  const player = new Tone.Player({ loop: true, fadeIn: 0.01, fadeOut: 0.02 }).connect(Tone.getDestination())
+  pendingLoopLayer = { player, url }
+  await player.load(url)
+  player.start()
+  loopLayers.push({ player, url, bpm: currentBpm, capturedAt: Date.now() })
+  pendingLoopLayer = null
   loopState = 'PLAYING'
   return true
 }
@@ -491,12 +662,17 @@ export async function captureOneBarLoop() {
   try {
     recorder.start()
   } catch {
-    loopState = loopPlayer ? 'PLAYING' : 'IDLE'
+    loopState = loopLayers.length ? 'PLAYING' : 'IDLE'
     return false
   }
   loopCaptureTimer = setTimeout(() => {
     finalizeLoopCapture().catch(() => {
-      loopState = loopPlayer ? 'PLAYING' : 'IDLE'
+      if (pendingLoopLayer) {
+        pendingLoopLayer.player.dispose()
+        URL.revokeObjectURL(pendingLoopLayer.url)
+        pendingLoopLayer = null
+      }
+      loopState = loopLayers.length ? 'PLAYING' : 'IDLE'
     })
   }, Math.max(120, loopCaptureEndMs - loopCaptureStartMs))
   return true
@@ -512,16 +688,23 @@ export async function clearLoop() {
     try { await recorder.stop() } catch {}
   }
 
-  if (loopPlayer) {
-    try { loopPlayer.stop() } catch {}
-    loopPlayer.dispose()
-    loopPlayer = null
+  if (pendingLoopLayer) {
+    pendingLoopLayer.player.dispose()
+    URL.revokeObjectURL(pendingLoopLayer.url)
+    pendingLoopLayer = null
   }
-  if (loopBlobUrl) {
-    URL.revokeObjectURL(loopBlobUrl)
-    loopBlobUrl = null
+
+  while (loopLayers.length) {
+    const layer = loopLayers.pop()
+    try { layer.player.stop() } catch {}
+    layer.player.dispose()
+    URL.revokeObjectURL(layer.url)
   }
   loopState = 'IDLE'
+}
+
+export function getLoopLayerCount() {
+  return loopLayers.length
 }
 
 export function getFreqData() {
