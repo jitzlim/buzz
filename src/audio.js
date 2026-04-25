@@ -137,6 +137,8 @@ let chordDensity = 0
 let chordThird = 4
 let chordSpread = 0
 let chordLevel = 0
+let chordVoice1BaseVolume = -10
+let chordVoice2BaseVolume = -12
 
 function applyDelaySyncTime(ramp = 0.05) {
   if (!delay) return
@@ -208,10 +210,12 @@ function shouldUseChordVoices() {
 function playChordVoices() {
   if (!chordVoice1 || !chordVoice2 || !shouldUseChordVoices()) return
   const [, voice1Freq, voice2Freq] = chordFrequencies(currentFreq)
-  chordVoice1.volume.rampTo(chordLevel <= 0.66 ? -11 : -9, 0.05)
+  chordVoice1BaseVolume = chordLevel <= 0.66 ? -11 : -9
+  chordVoice2BaseVolume = chordDensity >= 3 ? -10 : -13
+  chordVoice1.volume.rampTo(chordVoice1BaseVolume, 0.05)
   chordVoice1.triggerAttack(voice1Freq || currentFreq)
   if (chordDensity >= 2) {
-    chordVoice2.volume.rampTo(chordDensity >= 3 ? -10 : -13, 0.05)
+    chordVoice2.volume.rampTo(chordVoice2BaseVolume, 0.05)
     chordVoice2.triggerAttack(voice2Freq || voice1Freq || currentFreq)
   }
   chordActive = true
@@ -445,6 +449,14 @@ export function setVolume(norm) {
   const clamped = Math.max(0, Math.min(1, norm))
   const db = clamped < 0.01 ? -Infinity : Tone.gainToDb(clamped) - 4
   synth.volume.rampTo(db, 0.05)
+  if (chordVoice1) {
+    const chordDb = db === -Infinity ? -Infinity : db + (chordVoice1BaseVolume + 4)
+    chordVoice1.volume.rampTo(chordDb, 0.05)
+  }
+  if (chordVoice2) {
+    const chordDb = db === -Infinity ? -Infinity : db + (chordVoice2BaseVolume + 4)
+    chordVoice2.volume.rampTo(chordDb, 0.05)
+  }
 }
 
 export function setFilterCutoff(norm) {
