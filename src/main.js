@@ -11,6 +11,7 @@ import {
   setFilterCutoff, setFilterQ, setReverbWet,
   setVibrato, setVibratoRate, setDelay,
   setChordMode, setChordShape, getChordState, isBassInstrument, playUnlockCue,
+  isGrainInstrument, setGrainSize, getGrainState,
 } from './audio.js'
 import {
   initVision, tickVision,
@@ -189,6 +190,10 @@ function smoothPrimaryHand(hand, dt) {
 }
 
 function frequencyFromHand(hand) {
+  if (isGrainInstrument()) {
+    // Exponential: center hand = 440Hz = 1.0x rate, octave up/down per 2 units
+    return 440 * Math.pow(2, hand.attractor.y / 2)
+  }
   if (isBassInstrument()) {
     return 40 + ((hand.attractor.y + 2) / 4) * 240
   }
@@ -356,6 +361,7 @@ function loop(now) {
     } else if (peacePrimary) {
       nextInstrument()
       hud.pulses.instrument = 1
+      if (isGrainInstrument()) pushSceneBanner('GRAIN SAMPLING', now)
     }
     if (rootCycle) {
       const root = cycleRootNote()
@@ -384,6 +390,9 @@ function loop(now) {
 
     const vibratoNorm = clamp((spread - 0.1) / 0.4, 0, 1)
     setVibrato(vibratoNorm)
+    if (isGrainInstrument()) {
+      setGrainSize(clamp((spread - 0.1) / 0.4, 0, 1))
+    }
     } else if (audioStarted) {
       setPinchGate(1)
       setVolume(0)
@@ -699,6 +708,7 @@ function buildTelemetry({ dt, now, hand, hand2, currentFreq, freqData, gateOpen,
     bass: hud.meters.bass,
     presence: hud.meters.presence,
     fx: fxTelemetry,
+    grainState: isGrainInstrument() ? getGrainState() : null,
     loopState,
     loopLayers,
     loopProgress,
@@ -727,12 +737,23 @@ function buildHandLabels(telemetry) {
   const labels = []
 
   if (telemetry.hand.active) {
-    labels[0] = [
-      `CARRIER ${telemetry.note}`,
-      `GATE    ${telemetry.gate}`,
-      `FIELD   ${fieldLabel(telemetry.hand.spread)}`,
-      `VOICE   ${telemetry.instrument}`,
-    ]
+    if (telemetry.grainState) {
+      const gs = telemetry.grainState
+      const status = gs.loaded ? (gs.playing ? 'PLAYING' : 'READY') : gs.capturing ? 'SAMPLING' : 'INIT'
+      labels[0] = [
+        `GRAIN   ${status}`,
+        `RATE    ${gs.rate.toFixed(2)}x`,
+        `GRAIN   ${Math.round(gs.grainSize * 1000)}ms`,
+        `FIELD   ${fieldLabel(telemetry.hand.spread)}`,
+      ]
+    } else {
+      labels[0] = [
+        `CARRIER ${telemetry.note}`,
+        `GATE    ${telemetry.gate}`,
+        `FIELD   ${fieldLabel(telemetry.hand.spread)}`,
+        `VOICE   ${telemetry.instrument}`,
+      ]
+    }
   }
 
   if (telemetry.hand2.active) {

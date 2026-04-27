@@ -77,6 +77,11 @@ const INSTRUMENTS = [
       filterEnvelope: { attack: 0.01, decay: 0.22, sustain: 0.25, release: 0.18, baseFrequency: 90, octaves: 2.2 },
     }),
   },
+  {
+    name: 'GRAIN',
+    isGrain: true,
+    make: () => null,
+  },
 ]
 
 let currentIndex = 0
@@ -139,6 +144,16 @@ let chordSpread = 0
 let chordLevel = 0
 let chordVoice1BaseVolume = -10
 let chordVoice2BaseVolume = -12
+
+// --- Grain instrument state ---
+let userMedia      = null
+let micRecorder    = null
+let grainPlayer    = null
+let grainReady     = false
+let grainCapturing = false
+let grainGateOpen  = false
+let grainMicLoop   = false
+let grainSizeValue = 0.12
 
 function applyDelaySyncTime(ramp = 0.05) {
   if (!delay) return
@@ -225,6 +240,110 @@ function currentInstrument() {
   return INSTRUMENTS[currentIndex]
 }
 
+// --- Grain helpers ---
+
+export function isGrainInstrument() {
+  return Boolean(currentInstrument()?.isGrain)
+}
+
+function buildGrainChain() {
+  if (!grainPlayer) return
+  try { grainPlayer.disconnect() } catch {}
+  grainPlayer.chain(vibrato, filter, bitcrusher, drive, tremolo, pitchShift, delay, reverb, masterBus)
+}
+
+async function runMicCaptureLoop() {
+  while (grainMicLoop) {
+    try {
+      if (!micRecorder) break
+      grainCapturing = true
+      micRecorder.start()
+      await new Promise(r => setTimeout(r, 1500))
+      if (!grainMicLoop || !micRecorder) { grainCapturing = false; break }
+      grainCapturing = false
+      const blob = await micRecorder.stop()
+      if (!grainMicLoop || !grainPlayer || !blob) break
+      const url = URL.createObjectURL(blob)
+      const wasPlaying = grainGateOpen
+      await grainPlayer.load(url)
+      if (!grainMicLoop) break
+      if (wasPlaying && grainPlayer.state !== 'started') {
+        try { grainPlayer.start() } catch {}
+      }
+    } catch {
+      grainCapturing = false
+    }
+    if (!grainMicLoop) break
+    await new Promise(r => setTimeout(r, 400))
+  }
+  grainCapturing = false
+}
+
+export async function initGrainInstrument() {
+  if (grainReady) return true
+  try {
+    userMedia = new Tone.UserMedia()
+    await userMedia.open()
+    micRecorder = new Tone.Recorder()
+    userMedia.connect(micRecorder)
+    grainPlayer = new Tone.GrainPlayer({
+      loop: true,
+      grainSize: grainSizeValue,
+      overlap: 0.06,
+      playbackRate: 1,
+    })
+    grainPlayer.volume.value = -4
+    buildGrainChain()
+    grainReady = true
+    grainMicLoop = true
+    runMicCaptureLoop()
+    return true
+  } catch {
+    return false
+  }
+}
+
+function disposeGrainInstrument() {
+  grainMicLoop = false
+  grainCapturing = false
+  if (grainGateOpen && grainPlayer) {
+    try { grainPlayer.stop() } catch {}
+    grainGateOpen = false
+  }
+  if (micRecorder) {
+    micRecorder.stop().catch(() => {})
+    try { micRecorder.dispose() } catch {}
+    micRecorder = null
+  }
+  if (userMedia) {
+    try { userMedia.close() } catch {}
+    try { userMedia.dispose() } catch {}
+    userMedia = null
+  }
+  if (grainPlayer) {
+    try { grainPlayer.disconnect() } catch {}
+    try { grainPlayer.dispose() } catch {}
+    grainPlayer = null
+  }
+  grainReady = false
+}
+
+export function setGrainSize(norm) {
+  grainSizeValue = 0.03 + Math.max(0, Math.min(1, norm)) * 0.47
+  if (grainPlayer) grainPlayer.grainSize = grainSizeValue
+}
+
+export function getGrainState() {
+  return {
+    ready: grainReady,
+    capturing: grainCapturing,
+    loaded: grainReady && (grainPlayer?.loaded ?? false),
+    playing: grainGateOpen,
+    grainSize: grainSizeValue,
+    rate: grainPlayer?.playbackRate ?? 1,
+  }
+}
+
 export function initAudio() {
   vibrato  = new Tone.Vibrato({ frequency: 5, depth: 0, wet: 1 })
   filter   = new Tone.Filter({ frequency: 3000, type: 'lowpass', rolloff: -24 })
@@ -297,7 +416,23 @@ export function playUnlockCue() {
 
 // Called every frame with current pinch value
 export function setPinchGate(pinch) {
-  if (!synth || !audioStarted || arpActive) return
+  if (!audioStarted || arpActive) return
+
+  if (isGrainInstrument()) {
+    if (!grainPlayer || !grainPlayer.loaded) return
+    const shouldOpen  = pinch < 0.08
+    const shouldClose = pinch > 0.15
+    if (shouldOpen && !grainGateOpen) {
+      try { grainPlayer.start() } catch {}
+      grainGateOpen = true
+    } else if (shouldClose && grainGateOpen) {
+      try { grainPlayer.stop() } catch {}
+      grainGateOpen = false
+    }
+    return
+  }
+
+  if (!synth) return
   const shouldOpen = pinch < 0.08
   const shouldClose = pinch > 0.15
   if (shouldOpen && !gateOpen) {
@@ -316,32 +451,52 @@ export function setPinchGate(pinch) {
 }
 
 export function nextInstrument() {
-  if (!synth || !audioStarted) return
-  if (arpActive) { stopArp() }
-  if (gateOpen) { synth.triggerRelease(); gateOpen = false }
-  releaseChordVoices()
-  synth.disconnect()
-  synth.dispose()
+  if (!audioStarted) return
+  if (isGrainInstrument()) {
+    disposeGrainInstrument()
+  } else {
+    if (!synth) return
+    if (arpActive) { stopArp() }
+    if (gateOpen) { synth.triggerRelease(); gateOpen = false }
+    releaseChordVoices()
+    synth.disconnect()
+    synth.dispose()
+    synth = null
+  }
 
   currentIndex = (currentIndex + 1) % INSTRUMENTS.length
-  synth = INSTRUMENTS[currentIndex].make()
-  buildChain()
+  if (INSTRUMENTS[currentIndex].isGrain) {
+    initGrainInstrument()
+  } else {
+    synth = INSTRUMENTS[currentIndex].make()
+    buildChain()
+  }
 }
 
 export function getCurrentInstrumentName() { return INSTRUMENTS[currentIndex].name }
 export function getCurrentInstrumentIndex() { return currentIndex }
 export function setInstrumentIndex(index) {
-  if (!synth || !audioStarted) return
+  if (!audioStarted) return
   const safe = Math.max(0, Math.min(INSTRUMENTS.length - 1, index | 0))
   if (safe === currentIndex) return
-  if (arpActive) { stopArp() }
-  if (gateOpen) { synth.triggerRelease(); gateOpen = false }
-  releaseChordVoices()
-  synth.disconnect()
-  synth.dispose()
+  if (isGrainInstrument()) {
+    disposeGrainInstrument()
+  } else {
+    if (!synth) return
+    if (arpActive) { stopArp() }
+    if (gateOpen) { synth.triggerRelease(); gateOpen = false }
+    releaseChordVoices()
+    synth.disconnect()
+    synth.dispose()
+    synth = null
+  }
   currentIndex = safe
-  synth = INSTRUMENTS[currentIndex].make()
-  buildChain()
+  if (INSTRUMENTS[currentIndex].isGrain) {
+    initGrainInstrument()
+  } else {
+    synth = INSTRUMENTS[currentIndex].make()
+    buildChain()
+  }
 }
 
 export function cycleScale() {
@@ -405,6 +560,14 @@ export function isArpActive() { return arpActive }
 export function getCurrentFrequency() { return currentFreq }
 
 export function setFrequency(hz) {
+  if (isGrainInstrument()) {
+    if (!grainPlayer) return
+    // Exponential rate map: 440Hz = 1.0x, octave up = 2.0x, octave down = 0.5x
+    const rate = Math.max(0.2, Math.min(3.0, hz / 440))
+    grainPlayer.playbackRate = rate
+    currentFreq = hz
+    return
+  }
   if (!synth) return
   const min = isBassInstrument() ? 40 : 80
   const max = isBassInstrument() ? 280 : 1200
@@ -445,6 +608,13 @@ export function getChordState() {
 }
 
 export function setVolume(norm) {
+  if (isGrainInstrument()) {
+    if (!grainPlayer) return
+    const clamped = Math.max(0, Math.min(1, norm))
+    const db = clamped < 0.01 ? -Infinity : Tone.gainToDb(clamped) - 4
+    grainPlayer.volume.rampTo(db, 0.05)
+    return
+  }
   if (!synth) return
   const clamped = Math.max(0, Math.min(1, norm))
   const db = clamped < 0.01 ? -Infinity : Tone.gainToDb(clamped) - 4
@@ -607,7 +777,7 @@ export function getSceneState() {
 }
 
 export function applySceneState(scene) {
-  if (!scene || !synth || !audioStarted) return false
+  if (!scene || !audioStarted) return false
   try {
     if (typeof scene.instrumentIndex === 'number') setInstrumentIndex(scene.instrumentIndex)
     if (typeof scene.scaleIndex === 'number') setScaleIndex(scene.scaleIndex)
