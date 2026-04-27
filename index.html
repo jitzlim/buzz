@@ -620,12 +620,13 @@
             <div class="guide-grid">
               <div class="guide-row"><strong>Right pinch</strong><span>Gate carrier / play note</span></div>
               <div class="guide-row"><strong>Right peace</strong><span>Cycle voice</span></div>
+              <div class="guide-row"><strong>Peace + palm</strong><span>Cycle smoothing preset</span></div>
               <div class="guide-row"><strong>Left pinch</strong><span>Arm FX depth / amount</span></div>
               <div class="guide-row"><strong>Pinch rotate</strong><span>Sweep active FX parameter</span></div>
               <div class="guide-row"><strong>Left peace</strong><span>Short: FX mode / hold: key root</span></div>
               <div class="guide-row"><strong>Open palm</strong><span>Toggle arp latch</span></div>
               <div class="guide-row"><strong>Both palms</strong><span>Arm loop / right pinch records</span></div>
-              <div class="guide-row"><strong>Dual pinch</strong><span>Hold tight: clear loops</span></div>
+              <div class="guide-row"><strong>Dual pinch</strong><span>Short: perf lock / hold: clear loops</span></div>
             </div>
           </div>
         </div>
@@ -672,11 +673,18 @@
           </div>
         </div>
         <div class="bottom-grid">
+          <div class="panel muted" id="panel-loop">
+            <div class="label">Loop Deck</div>
+            <div class="meter" id="meter-loop"></div>
+            <div class="summary-line"><span id="loop-status">IDLE</span><strong id="loop-layers">LAYER 0/3</strong></div>
+          </div>
           <div class="panel">
             <div class="label">Signal Registry</div>
             <div class="row"><span class="row-key">Mode</span><span class="row-value" id="bottom-mode">ECHO CHAMBER</span></div>
             <div class="row"><span class="row-key">Voice</span><span class="row-value" id="bottom-voice">DUO</span></div>
             <div class="row"><span class="row-key">Scale</span><span class="row-value" id="bottom-scale">PENTA</span></div>
+            <div class="row"><span class="row-key">Lock</span><span class="row-value" id="bottom-lock">OFF</span></div>
+            <div class="row"><span class="row-key">Smooth</span><span class="row-value" id="bottom-smooth">SMOOTH</span></div>
           </div>
           <div class="panel muted">
             <div class="label">Band Energy</div>

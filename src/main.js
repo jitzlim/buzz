@@ -21,6 +21,11 @@ import { initDither, tickDither } from './dither.js'
 
 const NOTE_NAMES = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B']
 const LEFT_FX_MODES = ['ECHO', 'SPACE', 'FILTER', 'PERF', 'CHORD']
+const SMOOTHING_PRESETS = [
+  { name: 'RAW', posUp: 13, posDown: 10, pinchUp: 16, pinchDown: 12, angle: 15 },
+  { name: 'SMOOTH', posUp: 7, posDown: 6, pinchUp: 10, pinchDown: 8, angle: 9 },
+  { name: 'GLIDE', posUp: 3.5, posDown: 3, pinchUp: 6, pinchDown: 5, angle: 5 },
+]
 
 const hud = {
   refs: null,
@@ -56,6 +61,8 @@ let dualPinchAction = ''
 let loopArmed = false
 let loopGestureRecording = false
 let loopArmSince = 0
+let performanceLocked = false
+let smoothingPresetIndex = 1
 const LOOP_HOLD_LONG = 1200
 const FX_ARM_PINCH = 0.18
 const sceneSlots = [null, null, null]
@@ -129,12 +136,29 @@ function loopLabel(loopState, loopLayers, loopProgress) {
   return ''
 }
 
+function currentSmoothing() {
+  return SMOOTHING_PRESETS[smoothingPresetIndex]
+}
+
+function cycleSmoothingPreset(now) {
+  smoothingPresetIndex = (smoothingPresetIndex + 1) % SMOOTHING_PRESETS.length
+  pushSceneBanner(`SMOOTH ${currentSmoothing().name}`, now)
+  hud.pulses.mode = 1
+}
+
+function togglePerformanceLock(now) {
+  performanceLocked = !performanceLocked
+  pushSceneBanner(performanceLocked ? 'PERF LOCK ON' : 'PERF LOCK OFF', now)
+  hud.pulses.mode = 1
+}
+
 function smoothPrimaryHand(hand, dt) {
   if (!hand.active) {
     handSmooth.seeded = false
     return { ...hand }
   }
 
+  const preset = currentSmoothing()
   if (!handSmooth.seeded) {
     handSmooth.x = hand.attractor.x
     handSmooth.y = hand.attractor.y
@@ -145,13 +169,13 @@ function smoothPrimaryHand(hand, dt) {
     handSmooth.angle = hand.angle || 0
     handSmooth.seeded = true
   } else {
-    handSmooth.x = smooth(handSmooth.x, hand.attractor.x, dt, 7, 6)
-    handSmooth.y = smooth(handSmooth.y, hand.attractor.y, dt, 7, 6)
-    handSmooth.z = smooth(handSmooth.z, hand.attractor.z, dt, 7, 6)
-    handSmooth.pinch = smooth(handSmooth.pinch, hand.pinch, dt, 10, 8)
-    handSmooth.spread = smooth(handSmooth.spread, hand.spread, dt, 6, 5)
-    handSmooth.depth = smooth(handSmooth.depth, hand.depth, dt, 6, 5)
-    handSmooth.angle = smoothAngle(handSmooth.angle, hand.angle || 0, dt, 9)
+    handSmooth.x = smooth(handSmooth.x, hand.attractor.x, dt, preset.posUp, preset.posDown)
+    handSmooth.y = smooth(handSmooth.y, hand.attractor.y, dt, preset.posUp, preset.posDown)
+    handSmooth.z = smooth(handSmooth.z, hand.attractor.z, dt, preset.posUp, preset.posDown)
+    handSmooth.pinch = smooth(handSmooth.pinch, hand.pinch, dt, preset.pinchUp, preset.pinchDown)
+    handSmooth.spread = smooth(handSmooth.spread, hand.spread, dt, preset.posUp, preset.posDown)
+    handSmooth.depth = smooth(handSmooth.depth, hand.depth, dt, preset.posUp, preset.posDown)
+    handSmooth.angle = smoothAngle(handSmooth.angle, hand.angle || 0, dt, preset.angle)
   }
 
   return {
@@ -221,13 +245,19 @@ function setupHud() {
     bottomMode: document.getElementById('bottom-mode'),
     bottomVoice: document.getElementById('bottom-voice'),
     bottomScale: document.getElementById('bottom-scale'),
+    bottomLock: document.getElementById('bottom-lock'),
+    bottomSmooth: document.getElementById('bottom-smooth'),
     energyBass: document.getElementById('energy-bass'),
     energyPresence: document.getElementById('energy-presence'),
     energyGesture: document.getElementById('energy-gesture'),
+    loopMeter: document.getElementById('meter-loop'),
+    loopStatus: document.getElementById('loop-status'),
+    loopLayers: document.getElementById('loop-layers'),
     panelTrack: document.getElementById('panel-track'),
     panelPrimary: document.getElementById('panel-primary'),
     panelGate: document.getElementById('panel-gate'),
     panelFx: document.getElementById('panel-fx'),
+    panelLoop: document.getElementById('panel-loop'),
     panelMode: document.getElementById('panel-mode'),
     panelVoice: document.getElementById('panel-voice'),
     panelCarrier: document.getElementById('panel-carrier'),
@@ -317,7 +347,9 @@ function loop(now) {
     const peacePrimary = checkPeaceGesture()
     const peaceSecondary = checkPeaceGestureHand2()
     const rootCycle = checkRootCycleGesture()
-    if (peacePrimary && peaceSecondary) {
+    if (peacePrimary && hand2.palm) {
+      cycleSmoothingPreset(now)
+    } else if (peacePrimary && peaceSecondary) {
       handleSceneGesture(now, active, attractor)
       hud.pulses.mode = 1
       hud.pulses.instrument = 1
@@ -376,7 +408,7 @@ function loop(now) {
       hand2Smooth.seeded = false
     }
 
-    const fxArmed = hand2.active && audioStarted && hand2Smooth.pinch < FX_ARM_PINCH
+    const fxArmed = hand2.active && audioStarted && !performanceLocked && hand2Smooth.pinch < FX_ARM_PINCH
 
     if (fxArmed) {
     const y2 = hand2Smooth.y
@@ -475,14 +507,15 @@ function loop(now) {
       fxTelemetry = buildChordTelemetry(densityNorm)
       }
     } else if (hand2.active && audioStarted) {
+      const lockedLabel = performanceLocked ? 'YES' : 'NO'
       fxTelemetry = {
         mode: LEFT_FX_MODES[leftFxMode],
         envelope: 0,
-        row1: ['FX Armed', 'NO'],
+        row1: ['FX Lock', lockedLabel],
         row2: ['Pinch', `${Math.round((1 - Math.min(hand2Smooth.pinch / FX_ARM_PINCH, 1)) * 100)}%`],
         row3: ['Rotate', `${Math.round(angleNorm(hand2Smooth.angle) * 100)}%`],
-        summary: 'FX IDLE',
-        summaryValue: 'PINCH',
+        summary: performanceLocked ? 'PERF LOCK' : 'FX IDLE',
+        summaryValue: performanceLocked ? 'ON' : 'PINCH',
       }
     }
 
@@ -595,6 +628,10 @@ function handleLoopGesture(now, hand, hand2, enabled) {
 
   if (!dualPinchActive) return
 
+  const hold = now - dualPinchStart
+  if (hold >= 260 && dualPinchAction !== 'clear') {
+    togglePerformanceLock(now)
+  }
   dualPinchActive = false
   dualPinchStart = 0
   dualPinchAction = ''
@@ -665,6 +702,9 @@ function buildTelemetry({ dt, now, hand, hand2, currentFreq, freqData, gateOpen,
     loopState,
     loopLayers,
     loopProgress,
+    loopArmed,
+    performanceLocked,
+    smoothingPreset: currentSmoothing().name,
     sceneBanner: now < sceneBannerUntil ? sceneBanner : '',
     arpActive: isArpActive(),
     arpRoot: lastArpRoot,
@@ -746,6 +786,8 @@ function renderHud(telemetry) {
   r.bottomMode.textContent = `${telemetry.mode} CHAMBER`
   r.bottomVoice.textContent = telemetry.instrument
   r.bottomScale.textContent = `${telemetry.key} / ${telemetry.tempoBpm} BPM`
+  if (r.bottomLock) r.bottomLock.textContent = telemetry.performanceLocked ? 'ON' : 'OFF'
+  if (r.bottomSmooth) r.bottomSmooth.textContent = telemetry.smoothingPreset
   r.energyBass.textContent = `${Math.round(telemetry.bass * 100)}%`
   r.energyPresence.textContent = `${Math.round(telemetry.presence * 100)}%`
   const activeLoopLabel = loopLabel(telemetry.loopState, telemetry.loopLayers, telemetry.loopProgress)
@@ -755,6 +797,24 @@ function renderHud(telemetry) {
       ? telemetry.sceneBanner
       : telemetry.gestureState
 
+  const loopMeter = telemetry.loopState === 'RECORDING'
+    ? telemetry.loopProgress
+    : telemetry.loopState === 'PLAYING'
+      ? clamp(telemetry.loopLayers / 3, 0, 1)
+      : telemetry.loopArmed
+        ? 0.5
+        : 0
+  const loopStatus = telemetry.loopState === 'RECORDING'
+    ? 'REC'
+    : telemetry.loopArmed
+      ? 'ARMED'
+      : telemetry.loopState === 'PLAYING'
+        ? 'PLAY'
+        : 'IDLE'
+  setMeter(r.loopMeter, loopMeter)
+  if (r.loopStatus) r.loopStatus.textContent = loopStatus
+  if (r.loopLayers) r.loopLayers.textContent = `LAYER ${telemetry.loopLayers}/3`
+
   updateWaveform(telemetry)
   updateStatusMatrix(telemetry)
   updateTriggerLights(telemetry)
@@ -763,6 +823,7 @@ function renderHud(telemetry) {
   setPanelState(r.panelPrimary, telemetry.hand.active, !telemetry.hand.active)
   setPanelState(r.panelGate, telemetry.gateOpen, !telemetry.hand.active)
   setPanelState(r.panelFx, telemetry.hand2.active || telemetry.mode === 'CHORD' || hud.pulses.mode > 0.1, !telemetry.hand2.active && telemetry.mode !== 'CHORD')
+  setPanelState(r.panelLoop, telemetry.loopState !== 'IDLE' || telemetry.loopArmed, telemetry.loopState === 'IDLE' && !telemetry.loopArmed)
   setPanelState(r.panelMode, telemetry.hand2.active || hud.pulses.mode > 0.1, false)
   setPanelState(r.panelVoice, hud.pulses.instrument > 0.1 || telemetry.hand.active, false)
   setPanelState(r.panelCarrier, telemetry.hand.active || telemetry.arpActive, false)
