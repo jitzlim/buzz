@@ -64,6 +64,7 @@ let loopArmSince = 0
 let performanceLocked = false
 let smoothingPresetIndex = 1
 const LOOP_HOLD_LONG = 1200
+const LOOP_HOLD_SHORT_MAX = 700
 const FX_ARM_PINCH = 0.18
 const sceneSlots = [null, null, null]
 let scenePointer = 0
@@ -629,7 +630,7 @@ function handleLoopGesture(now, hand, hand2, enabled) {
   if (!dualPinchActive) return
 
   const hold = now - dualPinchStart
-  if (hold >= 260 && dualPinchAction !== 'clear') {
+  if (hold >= 260 && hold < LOOP_HOLD_SHORT_MAX && dualPinchAction !== 'clear') {
     togglePerformanceLock(now)
   }
   dualPinchActive = false
